@@ -14,60 +14,78 @@ namespace Discord\Parts\Thread;
 use Carbon\Carbon;
 use Discord\Builders\MessageBuilder;
 use Discord\Helpers\Collection;
-use Discord\Helpers\Deferred;
 use Discord\Http\Endpoint;
+use Discord\Http\Exceptions\NoPermissionsException;
 use Discord\Parts\Channel\Channel;
 use Discord\Parts\Channel\Message;
 use Discord\Parts\Embed\Embed;
 use Discord\Parts\Guild\Guild;
 use Discord\Parts\Part;
+use Discord\Parts\Permissions\RolePermission;
 use Discord\Parts\Thread\Member as ThreadMember;
 use Discord\Parts\User\Member;
 use Discord\Parts\User\User;
 use Discord\Repository\Channel\MessageRepository;
 use Discord\Repository\Thread\MemberRepository;
 use Discord\WebSockets\Event;
-use React\Promise\ExtendedPromiseInterface;
+use React\Promise\Deferred;
+use React\Promise\PromiseInterface;
+use Stringable;
 use Symfony\Component\OptionsResolver\OptionsResolver;
 use Traversable;
+
+use function Discord\getSnowflakeTimestamp;
+use function React\Promise\all;
+use function React\Promise\reject;
 
 /**
  * Represents a Discord thread.
  *
- * @property string            $id                    The ID of the thread.
- * @property string            $guild_id              The ID of the guild which the thread belongs to.
- * @property string            $name                  The name of the thread.
- * @property string            $last_message_id       The ID of the last message sent in the thread.
- * @property Carbon|null       $last_pin_timestamp    The timestamp when the last message was pinned in the thread.
- * @property int               $rate_limit_per_user   Amount of seconds a user has to wait before sending a new message.
- * @property string            $owner_id              The ID of the owner of the thread.
- * @property string            $parent_id             The ID of the channel which the thread was started in.
- * @property int               $message_count         An approximate count of the number of messages sent in the thread. Stops counting at 50.
- * @property int               $member_count          An approximate count of the number of members in the thread. Stops counting at 50.
- * @property Guild|null        $guild                 The guild which the thread belongs to.
- * @property User|null         $owner                 The owner of the thread.
- * @property Member|null       $owner_member          The member object for the owner of the thread.
- * @property Channel|null      $parent                The channel which the thread was created in.
- * @property bool              $archived              Whether the thread has been archived.
- * @property bool              $locked                Whether the thread has been locked.
- * @property int               $auto_archive_duration The number of minutes of inactivity until the thread is automatically archived.
- * @property string|null       $archiver_id           The ID of the user that archived the thread, if any.
- * @property User|null         $archiver              The user that archived the thread, if any.
- * @property Member|null       $archiver_member       The corresponding member object for the user that archived the thread, if any.
- * @property Carbon            $archive_timestamp     The time that the thread's archive status was changed.
- * @property MessageRepository $messages              Repository of messages sent in the thread.
- * @property MemberRepository  $members               Repository of members in the thread.
+ * @link https://discord.com/developers/docs/topics/threads
  *
- * @method ExtendedPromiseInterface sendMessage(MessageBuilder $builder)
- * @method ExtendedPromiseInterface sendMessage(string $text, bool $tts = false, Embed|array $embed = null, array $allowed_mentions = null, ?Message $replyTo = null)
+ * @since 7.0.0
+ *
+ * @property      string        $id                    The ID of the thread.
+ * @property      int           $type                  The type of thread.
+ * @property      string        $guild_id              The ID of the guild which the thread belongs to.
+ * @property-read Guild|null    $guild                 The guild which the thread belongs to.
+ * @property      string        $name                  The name of the thread.
+ * @property      string        $last_message_id       The ID of the last message sent in the thread.
+ * @property      Carbon|null   $last_pin_timestamp    The timestamp when the last message was pinned in the thread.
+ * @property      int           $rate_limit_per_user   Amount of seconds a user has to wait before sending a new message.
+ * @property      string        $owner_id              The ID of the owner of the thread.
+ * @property-read User|null     $owner                 The owner of the thread.
+ * @property-read Member|null   $owner_member          The member object for the owner of the thread.
+ * @property      string        $parent_id             The ID of the channel which the thread was started in.
+ * @property-read Channel|null  $parent                The channel which the thread was created in.
+ * @property      int           $message_count         Number of messages (not including the initial message or deleted messages) in a thread (if the thread was created before July 1, 2022, the message count is inaccurate when it's greater than 50).
+ * @property      int           $member_count          An approximate count of the number of members in the thread. Stops counting at 50.
+ * @property      object        $thread_metadata       Thread-specific fields not needed by other channels.
+ * @property      bool          $archived              Whether the thread has been archived.
+ * @property      int|null      $auto_archive_duration The number of minutes of inactivity until the thread is automatically archived.
+ * @property      Carbon        $archive_timestamp     The time that the thread's archive status was changed.
+ * @property      bool          $locked                Whether the thread has been locked.
+ * @property      bool|null     $invitable             Whether non-moderators can add other non-moderators to a thread; only available on private threads.
+ * @property      Carbon|null   $create_timestamp      Timestamp when the thread was created; only populated for threads created after 2022-01-09.
+ * @property      int|null      $total_message_sent    Number of messages ever sent in a thread, it's similar to `message_count` on message creation, but will not decrement the number when a message is deleted.
+ * @property      int|null      $flags                 Channel flags combined as a bitfield. PINNED can only be set for threads in forum channels.
+ * @property      string[]|null $applied_tags          The IDs of the set of tags that have been applied to a thread in a forum channel, limited to 5.
+ *
+ * @property MessageRepository $messages Repository of messages sent in the thread.
+ * @property MemberRepository  $members  Repository of members in the thread.
+ *
+ * @method PromiseInterface<Message> sendMessage(MessageBuilder $builder)
  */
-class Thread extends Part
+class Thread extends Part implements Stringable
 {
+    public const FLAG_PINNED = (1 << 1);
+
     /**
-     * @inheritdoc
+     * {@inheritDoc}
      */
     protected $fillable = [
         'id',
+        'type',
         'guild_id',
         'name',
         'last_message_id',
@@ -78,32 +96,45 @@ class Thread extends Part
         'message_count',
         'member_count',
         'thread_metadata',
+        'member',
+        'total_message_sent',
+        'flags',
+        'applied_tags',
+
+        // events
+        'newly_created',
     ];
 
     /**
-     * @inheritdoc
+     * {@inheritDoc}
      */
-    protected $visible = [
-        'guild',
-        'owner',
-        'owner_member',
-        'parent',
-        'archived',
-        'locked',
-        'auto_archive_duration',
-        'archiver_id',
-        'archiver',
-        'archiver_member',
-        'archive_timestamp',
+    protected $hidden = [
+        'member',
     ];
 
     /**
-     * @inheritdoc
+     * {@inheritDoc}
      */
     protected $repositories = [
         'messages' => MessageRepository::class,
         'members' => MemberRepository::class,
     ];
+
+    /**
+     * {@inheritDoc}
+     */
+    protected function afterConstruct(): void
+    {
+        if (isset($this->attributes['member'])) {
+            $memberPart = $this->members->create((array) $this->attributes['member'] + [
+                'id' => $this->id,
+                'user_id' => $this->discord->id,
+                'guild_id' => $this->guild_id,
+            ], $this->created);
+            $memberPart->created = &$this->created;
+            $this->members->pushItem($memberPart);
+        }
+    }
 
     /**
      * Returns the guild which the thread belongs to.
@@ -132,8 +163,8 @@ class Thread extends Part
      */
     protected function getOwnerMemberAttribute(): ?Member
     {
-        if ($this->guild) {
-            return $this->guild->members->get('id', $this->owner_id);
+        if ($guild = $this->guild) {
+            return $guild->members->get('id', $this->owner_id);
         }
 
         return null;
@@ -146,8 +177,8 @@ class Thread extends Part
      */
     protected function getParentAttribute(): ?Channel
     {
-        if ($this->guild) {
-            return $this->guild->channels->get('id', $this->parent_id);
+        if ($guild = $this->guild) {
+            return $guild->channels->get('id', $this->parent_id);
         }
 
         return $this->discord->getChannel($this->parent_id);
@@ -157,14 +188,16 @@ class Thread extends Part
      * Returns the timestamp when the last message was pinned in the thread.
      *
      * @return Carbon|null
+     *
+     * @throws \Exception
      */
     protected function getLastPinTimestampAttribute(): ?Carbon
     {
-        if (isset($this->attributes['last_pin_timestamp'])) {
-            return new Carbon($this->attributes['last_pin_timestamp']);
+        if (! isset($this->attributes['last_pin_timestamp'])) {
+            return null;
         }
 
-        return null;
+        return new Carbon($this->attributes['last_pin_timestamp']);
     }
 
     /**
@@ -174,7 +207,7 @@ class Thread extends Part
      */
     protected function getArchivedAttribute(): bool
     {
-        return $this->thread_metadata->archived;
+        return $this->thread_metadata->archived ?? false;
     }
 
     /**
@@ -188,24 +221,24 @@ class Thread extends Part
     }
 
     /**
-     * Returns the number of minutes of inactivity required for the thread
-     * to auto archive.
+     * Returns whether the thread is archived.
      *
-     * @return int
+     * @return bool|null
      */
-    protected function getAutoArchiveDurationAttribute(): int
+    protected function getInvitableAttribute(): ?bool
     {
-        return $this->thread_metadata->auto_archive_duration;
+        return $this->thread_metadata->invitable ?? null;
     }
 
     /**
-     * Returns the ID of the user who archived the thread.
+     * Returns the number of minutes of inactivity required for the thread to
+     * auto archive.
      *
-     * @return string|null
+     * @return int|null
      */
-    protected function getArchiverIdAttribute(): ?string
+    protected function getAutoArchiveDurationAttribute(): ?int
     {
-        return $this->thread_metadata->archiver_id ?? null;
+        return $this->thread_metadata->auto_archive_duration ?? null;
     }
 
     /**
@@ -213,9 +246,9 @@ class Thread extends Part
      *
      * @param bool $value
      */
-    protected function setArchivedAttribute(bool $value)
+    protected function setArchivedAttribute(bool $value): void
     {
-        $this->thread_metadata->archived = $value;
+        $this->attributes['thread_metadata']->archived = $value;
     }
 
     /**
@@ -223,56 +256,32 @@ class Thread extends Part
      *
      * @param bool $value
      */
-    protected function setLockedAttribute(bool $value)
+    protected function setLockedAttribute(bool $value): void
     {
-        $this->thread_metadata->locked = $value;
+        $this->attributes['thread_metadata']->locked = $value;
     }
 
     /**
-     * Set the number of minutes of inactivity required for the thread to auto archive.
+     * Set the number of minutes of inactivity required for the thread to auto
+     * archive.
      *
      * @param int $value
      */
-    protected function setAutoArchiveDurationAttribute(int $value)
+    protected function setAutoArchiveDurationAttribute(int $value): void
     {
-        $this->thread_metadata->auto_archive_duration = $value;
-    }
-
-    /**
-     * Returns the user who archived the thread.
-     *
-     * @return User|null
-     */
-    protected function getArchiverAttribute(): ?User
-    {
-        if ($this->archiver_id) {
-            return $this->discord->users->get('id', $this->archiver_id);
-        }
-
-        return null;
-    }
-
-    /**
-     * Returns the member object for the user who archived the thread.
-     *
-     * @return Member|null
-     */
-    protected function getArchiverMemberAttribute(): ?Member
-    {
-        if ($this->archiver_id && $this->guild) {
-            return $this->guild->members->get('id', $this->archiver_id);
-        }
-
-        return null;
+        $this->attributes['thread_metadata']->auto_archive_duration = $value;
     }
 
     /**
      * Returns the time that the thread's archive status was changed.
      *
-     * Note that this does not mean the time that the thread was archived - it can
-     * also mean the time when the thread was created, archived, unarchived etc.
+     * Note that this does not mean the time that the thread was archived - it
+     * can also mean the time when the thread was created, archived, unarchived
+     * etc.
      *
      * @return Carbon
+     *
+     * @throws \Exception
      */
     protected function getArchiveTimestampAttribute(): Carbon
     {
@@ -280,13 +289,30 @@ class Thread extends Part
     }
 
     /**
+     * Returns the timestamp when the thread was created; only populated for
+     * threads created after 2022-01-09.
+     *
+     * @return Carbon|null
+     *
+     * @throws \Exception
+     */
+    protected function getCreateTimestampAttribute(): ?Carbon
+    {
+        if (! isset($this->attributes['create_timestamp'])) {
+            return null;
+        }
+
+        return new Carbon($this->thread_metadata->create_timestamp);
+    }
+
+    /**
      * Attempts to join the thread.
      *
-     * @see https://discord.com/developers/docs/resources/channel#join-thread
+     * @link https://discord.com/developers/docs/resources/channel#join-thread
      *
-     * @return ExtendedPromiseInterface
+     * @return PromiseInterface
      */
-    public function join(): ExtendedPromiseInterface
+    public function join(): PromiseInterface
     {
         return $this->http->put(Endpoint::bind(Endpoint::THREAD_MEMBER_ME, $this->id));
     }
@@ -294,13 +320,13 @@ class Thread extends Part
     /**
      * Attempts to add a user to the thread.
      *
-     * @see https://discord.com/developers/docs/resources/channel#add-thread-member
+     * @link https://discord.com/developers/docs/resources/channel#add-thread-member
      *
      * @param User|Member|string $user User to add. Can be one of the user objects or a user ID.
      *
-     * @return ExtendedPromiseInterface
+     * @return PromiseInterface
      */
-    public function addMember($user): ExtendedPromiseInterface
+    public function addMember($user): PromiseInterface
     {
         if ($user instanceof User || $user instanceof Member) {
             $user = $user->id;
@@ -312,11 +338,11 @@ class Thread extends Part
     /**
      * Attempts to leave the thread.
      *
-     * @see https://discord.com/developers/docs/resources/channel#leave-thread
+     * @link https://discord.com/developers/docs/resources/channel#leave-thread
      *
-     * @return ExtendedPromiseInterface
+     * @return PromiseInterface
      */
-    public function leave(): ExtendedPromiseInterface
+    public function leave(): PromiseInterface
     {
         return $this->http->delete(Endpoint::bind(Endpoint::THREAD_MEMBER_ME, $this->id));
     }
@@ -324,13 +350,13 @@ class Thread extends Part
     /**
      * Attempts to remove a user from the thread.
      *
-     * @see https://discord.com/developers/docs/resources/channel#remove-thread-member
+     * @link https://discord.com/developers/docs/resources/channel#remove-thread-member
      *
      * @param User|Member|ThreadMember|string $user User to remove. Can be one of the user objects or a user ID.
      *
-     * @return ExtendedPromiseInterface
+     * @return PromiseInterface
      */
-    public function removeMember($user): ExtendedPromiseInterface
+    public function removeMember($user): PromiseInterface
     {
         if ($user instanceof User || $user instanceof Member) {
             $user = $user->id;
@@ -347,16 +373,21 @@ class Thread extends Part
      * @param string      $name   New thread name.
      * @param string|null $reason Reason for Audit Log.
      *
-     * @return ExtendedPromiseInterface
+     * @return PromiseInterface<self>
      */
-    public function rename(string $name, ?string $reason = null): ExtendedPromiseInterface
+    public function rename(string $name, ?string $reason = null): PromiseInterface
     {
         $headers = [];
         if (isset($reason)) {
             $headers['X-Audit-Log-Reason'] = $reason;
         }
 
-        return $this->http->patch(Endpoint::bind(Endpoint::THREAD, $this->id), ['name' => $name], $headers);
+        return $this->http->patch(Endpoint::bind(Endpoint::THREAD, $this->id), ['name' => $name], $headers)
+            ->then(function ($response) {
+                $this->name = $response->name;
+
+                return $this;
+            });
     }
 
     /**
@@ -364,16 +395,21 @@ class Thread extends Part
      *
      * @param string|null $reason Reason for Audit Log.
      *
-     * @return ExtendedPromiseInterface
+     * @return PromiseInterface<self>
      */
-    public function archive(?string $reason = null): ExtendedPromiseInterface
+    public function archive(?string $reason = null): PromiseInterface
     {
         $headers = [];
         if (isset($reason)) {
             $headers['X-Audit-Log-Reason'] = $reason;
         }
 
-        return $this->http->patch(Endpoint::bind(Endpoint::THREAD, $this->id), ['archived' => true], $headers);
+        return $this->http->patch(Endpoint::bind(Endpoint::THREAD, $this->id), ['archived' => true], $headers)
+            ->then(function ($response) {
+                $this->archived = $response->thread_metadata->archived;
+
+                return $this;
+            });
     }
 
     /**
@@ -381,16 +417,21 @@ class Thread extends Part
      *
      * @param string|null $reason Reason for Audit Log.
      *
-     * @return ExtendedPromiseInterface
+     * @return PromiseInterface<self>
      */
-    public function unarchive(?string $reason = null): ExtendedPromiseInterface
+    public function unarchive(?string $reason = null): PromiseInterface
     {
         $headers = [];
         if (isset($reason)) {
             $headers['X-Audit-Log-Reason'] = $reason;
         }
 
-        return $this->http->patch(Endpoint::bind(Endpoint::THREAD, $this->id), ['archived' => false], $headers);
+        return $this->http->patch(Endpoint::bind(Endpoint::THREAD, $this->id), ['archived' => false], $headers)
+            ->then(function ($response) {
+                $this->archived = $response->thread_metadata->archived;
+
+                return $this;
+            });
     }
 
     /**
@@ -399,37 +440,40 @@ class Thread extends Part
      * @param int         $duration Duration in minutes.
      * @param string|null $reason   Reason for Audit Log.
      *
-     * @return ExtendedPromiseInterface
+     * @return PromiseInterface<self>
      */
-    public function setAutoArchiveDuration(int $duration, ?string $reason = null): ExtendedPromiseInterface
+    public function setAutoArchiveDuration(int $duration, ?string $reason = null): PromiseInterface
     {
         $headers = [];
         if (isset($reason)) {
             $headers['X-Audit-Log-Reason'] = $reason;
         }
 
-        return $this->http->patch(Endpoint::bind(Endpoint::THREAD, $this->id), ['auto_archive_duration' => $duration], $headers);
+        return $this->http->patch(Endpoint::bind(Endpoint::THREAD, $this->id), ['auto_archive_duration' => $duration], $headers)
+            ->then(function ($response) {
+                $this->auto_archive_duration = $response->thread_metadata->auto_archive_duration;
+
+                return $this;
+            });
     }
 
     /**
      * Returns the thread's pinned messages.
      *
-     * @see https://discord.com/developers/docs/resources/channel#get-pinned-messages
+     * @link https://discord.com/developers/docs/resources/channel#get-pinned-messages
      *
-     * @return ExtendedPromiseInterface<Collection<Message>>
+     * @return PromiseInterface<Collection<Message[]>>
+     *
+     * @todo Make it in a trait along with Channel
      */
-    public function getPinnedMessages(): ExtendedPromiseInterface
+    public function getPinnedMessages(): PromiseInterface
     {
         return $this->http->get(Endpoint::bind(Endpoint::CHANNEL_PINS, $this->id))
             ->then(function ($responses) {
                 $messages = Collection::for(Message::class);
 
                 foreach ($responses as $response) {
-                    if (! $message = $this->messages->get('id', $response->id)) {
-                        $message = $this->factory->create(Message::class, $response, true);
-                    }
-
-                    $messages->push($message);
+                    $messages->pushItem($this->messages->get('id', $response->id) ?: $this->messages->create($response, true));
                 }
 
                 return $messages;
@@ -439,83 +483,91 @@ class Thread extends Part
     /**
      * Bulk deletes an array of messages.
      *
-     * @see https://discord.com/developers/docs/resources/channel#bulk-delete-messages
+     * @link https://discord.com/developers/docs/resources/channel#bulk-delete-messages
      *
-     * @param array|Traversable $messages
+     * @param array|Traversable $messages An array of messages to delete.
      * @param string|null       $reason   Reason for Audit Log (only for bulk messages).
      *
-     * @return ExtendedPromiseInterface
+     * @return PromiseInterface
+     *
+     * @todo Make it in a trait along with Channel
      */
-    public function deleteMessages($messages, ?string $reason = null): ExtendedPromiseInterface
+    public function deleteMessages($messages, ?string $reason = null): PromiseInterface
     {
         if (! is_array($messages) && ! ($messages instanceof Traversable)) {
-            return \React\Promise\reject(new \Exception('$messages must be an array or implement Traversable.'));
+            return reject(new \InvalidArgumentException('$messages must be an array or implement Traversable.'));
         }
 
-        $count = count($messages);
-
-        if ($count == 0) {
-            return \React\Promise\resolve();
-        } elseif ($count == 1) {
-            foreach ($messages as $message) {
-                if ($message instanceof Message) {
-                    $message = $message->id;
-                }
-
-                return $this->http->delete(Endpoint::bind(Endpoint::CHANNEL_MESSAGE, $this->id, $message));
+        if ($botperms = $this->getBotPermissions()) {
+            if (! $botperms->manage_messages) {
+                return reject(new NoPermissionsException("You do not have permission to delete messages in the thread {$this->id}."));
             }
         }
 
-        $headers = [];
+        $headers = $promises = $messagesBulk = $messagesSingle = [];
         if (isset($reason)) {
             $headers['X-Audit-Log-Reason'] = $reason;
         }
 
-        $promises = [];
-        $chunks = array_chunk(array_map(function ($message) {
+        foreach ($messages as $message) {
             if ($message instanceof Message) {
-                return $message->id;
+                $message = $message->id;
             }
 
-            return $message;
-        }, $messages), 100);
-
-        foreach ($chunks as $messages) {
-            $promises[] = $this->http->post(Endpoint::bind(Endpoint::CHANNEL_MESSAGES_BULK_DELETE, $this->id), [
-                'messages' => $messages,
-            ], $headers);
+            if (getSnowflakeTimestamp($message) < time() - 1209600) {
+                $messagesSingle[] = $message;
+            } else {
+                $messagesBulk[] = $message;
+            }
         }
 
-        return \React\Promise\all($promises);
+        while (count($messagesBulk) > 1) {
+            $promises[] = $this->http->post(Endpoint::bind(Endpoint::CHANNEL_MESSAGES_BULK_DELETE, $this->id), ['messages' => array_slice($messagesBulk, 0, 100)], $headers);
+            $messagesBulk = array_slice($messagesBulk, 100);
+        }
+
+        $messagesSingle = array_merge($messagesSingle, $messagesBulk);
+
+        foreach ($messagesSingle as $message) {
+            $promises[] = $this->http->delete(Endpoint::bind(Endpoint::CHANNEL_MESSAGE, $this->id, $message));
+        }
+
+        return all($promises);
     }
 
     /**
-     * Fetches the message history of the thread with a given array
-     * of arguments.
+     * Fetches the message history of the thread with a given array of arguments.
      *
-     * @see https://discord.com/developers/docs/resources/channel#get-channel-messages
+     * @link https://discord.com/developers/docs/resources/channel#get-channel-messages
      *
-     * @param array $options
+     * @param array               $options           Array of options.
+     * @param string|Message|null $options['around'] Get messages around this message ID.
+     * @param string|Message|null $options['before'] Get messages before this message ID.
+     * @param string|Message|null $options['after']  Get messages after this message ID.
+     * @param int|null            $options['limit']  Max number of messages to return (1-100). Defaults to 50.
      *
-     * @return ExtendedPromiseInterface<Collection<Message>>
+     * @return PromiseInterface<Collection<Message[]>>
+     *
+     * @todo Make it in a trait along with Channel
      */
-    public function getMessageHistory(array $options): ExtendedPromiseInterface
+    public function getMessageHistory(array $options = []): PromiseInterface
     {
         $resolver = new OptionsResolver();
         $resolver
-            ->setDefaults(['limit' => 100, 'cache' => false])
+            ->setDefaults(['limit' => 50, 'cache' => false])
             ->setDefined(['before', 'after', 'around'])
             ->setAllowedTypes('before', [Message::class, 'string'])
             ->setAllowedTypes('after', [Message::class, 'string'])
             ->setAllowedTypes('around', [Message::class, 'string'])
-            ->setAllowedValues('limit', range(1, 100));
+            ->setAllowedTypes('limit', 'integer')
+            ->setAllowedValues('limit', fn ($value) => ($value >= 1 && $value <= 100));
 
         $options = $resolver->resolve($options);
 
         if (isset($options['before'], $options['after']) ||
             isset($options['before'], $options['around']) ||
             isset($options['around'], $options['after'])) {
-            return \React\Promise\reject(new \Exception('Can only specify one of before, after and around.'));
+            return reject(new \Exception('Can only specify one of before, after and around.'));
         }
 
         $endpoint = Endpoint::bind(Endpoint::CHANNEL_MESSAGES, $this->id);
@@ -534,15 +586,15 @@ class Thread extends Part
         }
 
         return $this->http->get($endpoint)->then(function ($responses) {
-            $messages = new Collection();
+            $messages = Collection::for(Message::class);
 
             foreach ($responses as $response) {
                 if (! $message = $this->messages->get('id', $response->id)) {
-                    $message = $this->factory->create(Message::class, $response, true);
-                    $this->messages->push($message);
+                    $message = $this->messages->create($response, true);
+                    $this->messages->pushItem($message);
                 }
 
-                $messages->push($message);
+                $messages->pushItem($message);
             }
 
             return $messages;
@@ -552,21 +604,25 @@ class Thread extends Part
     /**
      * Pins a message in the thread.
      *
-     * @see https://discord.com/developers/docs/resources/channel#pin-message
+     * @link https://discord.com/developers/docs/resources/channel#pin-message
      *
      * @param Message     $message
      * @param string|null $reason  Reason for Audit Log.
      *
-     * @return ExtendedPromiseInterface<Message>
+     * @throws \RuntimeException
+     *
+     * @return PromiseInterface<Message>
+     *
+     * @todo Make it in a trait along with Channel
      */
-    public function pinMessage(Message $message, ?string $reason = null): ExtendedPromiseInterface
+    public function pinMessage(Message $message, ?string $reason = null): PromiseInterface
     {
         if ($message->pinned) {
-            return \React\Promise\reject(new \Exception('This message is already pinned.'));
+            return reject(new \RuntimeException('This message is already pinned.'));
         }
 
         if ($message->channel_id != $this->id) {
-            return \React\Promise\reject(new \Exception('You cannot pin a message not sent in this thread.'));
+            return reject(new \RuntimeException('You cannot pin a message not sent in this thread.'));
         }
 
         $headers = [];
@@ -584,21 +640,25 @@ class Thread extends Part
     /**
      * Unpins a message in the thread.
      *
-     * @see https://discord.com/developers/docs/resources/channel#unpin-message
+     * @link https://discord.com/developers/docs/resources/channel#unpin-message
      *
      * @param Message     $message
      * @param string|null $reason  Reason for Audit Log.
      *
-     * @return ExtendedPromiseInterface<Message>
+     * @throws \RuntimeException
+     *
+     * @return PromiseInterface<Message>
+     *
+     * @todo Make it in a trait along with Channel
      */
-    public function unpinMessage(Message $message, ?string $reason = null): ExtendedPromiseInterface
+    public function unpinMessage(Message $message, ?string $reason = null): PromiseInterface
     {
         if (! $message->pinned) {
-            return \React\Promise\reject(new \Exception('This message is not pinned.'));
+            return reject(new \RuntimeException('This message is not pinned.'));
         }
 
         if ($message->channel_id != $this->id) {
-            return \React\Promise\reject(new \Exception('You cannot un-pin a message not sent in this thread.'));
+            return reject(new \RuntimeException('You cannot un-pin a message not sent in this thread.'));
         }
 
         $headers = [];
@@ -616,10 +676,11 @@ class Thread extends Part
     /**
      * Sends a message to the thread.
      *
-     * Takes a `MessageBuilder` or content of the message for the first parameter. If the first parameter
-     * is an instance of `MessageBuilder`, the rest of the arguments are disregarded.
+     * Takes a `MessageBuilder` or content of the message for the first
+     * parameter. If the first parameter is an instance of `MessageBuilder`, the
+     * rest of the arguments are disregarded.
      *
-     * @see https://discord.com/developers/docs/resources/channel#create-message
+     * @link https://discord.com/developers/docs/resources/channel#create-message
      *
      * @param MessageBuilder|string $message          The message builder that should be converted into a message, or the string content of the message.
      * @param bool                  $tts              Whether the message is TTS.
@@ -627,9 +688,11 @@ class Thread extends Part
      * @param array|null            $allowed_mentions Allowed mentions object for the message.
      * @param Message|null          $replyTo          Sends the message as a reply to the given message instance.
      *
-     * @return ExtendedPromiseInterface<Message>
+     * @return PromiseInterface<Message>
+     *
+     * @todo Make it in a trait along with Channel
      */
-    public function sendMessage($message, bool $tts = false, $embed = null, $allowed_mentions = null, ?Message $replyTo = null): ExtendedPromiseInterface
+    public function sendMessage($message, bool $tts = false, $embed = null, $allowed_mentions = null, ?Message $replyTo = null): PromiseInterface
     {
         // Backwards compatible support for old `sendMessage` function signature.
         if (! ($message instanceof MessageBuilder)) {
@@ -661,24 +724,42 @@ class Thread extends Part
             }
 
             return $this->http->post(Endpoint::bind(Endpoint::CHANNEL_MESSAGES, $this->id), $message);
-        })()->then(function ($response) {
-            return $this->factory->create(Message::class, $response, true);
-        });
+        })()->then(fn ($response) => $this->messages->get('id', $response->id) ?: $this->messages->create($response, true));
     }
 
     /**
      * Sends an embed to the thread.
      *
+     * @deprecated 10.0.0 Use `Channel::sendMessage` with `MessageBuilder::addEmbed()`
+     *
      * @see Thread::sendMessage()
      *
      * @param Embed $embed Embed to send.
      *
-     * @return ExtendedPromiseInterface<Message>
+     * @return PromiseInterface<Message>
+     *
+     * @todo Make it in a trait along with Channel
      */
-    public function sendEmbed(Embed $embed): ExtendedPromiseInterface
+    public function sendEmbed(Embed $embed): PromiseInterface
     {
         return $this->sendMessage(MessageBuilder::new()
             ->addEmbed($embed));
+    }
+
+    /**
+     * Broadcasts that you are typing to the thread. Lasts for 5 seconds.
+     *
+     * @link https://discord.com/developers/docs/resources/channel#trigger-typing-indicator
+     *
+     * @since 10.0.0
+     *
+     * @throws \RuntimeException
+     *
+     * @return PromiseInterface
+     */
+    public function broadcastTyping(): PromiseInterface
+    {
+        return $this->http->post(Endpoint::bind(Endpoint::CHANNEL_TYPING, $this->id));
     }
 
     /**
@@ -689,9 +770,11 @@ class Thread extends Part
      * @param int      $options ['time']  Time in milliseconds until the collector finishes or false.
      * @param int      $options ['limit'] The amount of messages allowed or false.
      *
-     * @return ExtendedPromiseInterface<Collection<Message>>
+     * @return PromiseInterface<Collection<Message[]>>
+     *
+     * @todo Make it in a trait along with Channel
      */
-    public function createMessageCollector(callable $filter, array $options = []): ExtendedPromiseInterface
+    public function createMessageCollector(callable $filter, array $options = []): PromiseInterface
     {
         $deferred = new Deferred();
         $messages = new Collection([], null, null);
@@ -711,13 +794,13 @@ class Thread extends Part
             $filterResult = call_user_func_array($filter, [$message]);
 
             if ($filterResult) {
-                $messages->push($message);
+                $messages->pushItem($message);
 
-                if ($options['limit'] !== false && sizeof($messages) >= $options['limit']) {
+                if ($options['limit'] !== false && count($messages) >= $options['limit']) {
                     $this->discord->removeListener(Event::MESSAGE_CREATE, $eventHandler);
                     $deferred->resolve($messages);
 
-                    if (! is_null($timer)) {
+                    if (null !== $timer) {
                         $this->discord->getLoop()->cancelTimer($timer);
                     }
                 }
@@ -737,28 +820,78 @@ class Thread extends Part
     }
 
     /**
-     * @inheritdoc
+     * Returns the bot's permissions in the thread.
+     *
+     * @return RolePermission|null
      */
-    public function getUpdatableAttributes(): array
+    public function getBotPermissions(): ?RolePermission
     {
-        return [
-            'name' => $this->name,
-            'rate_limit_per_user' => $this->rate_limit_per_user,
-            'archived' => $this->archived,
-            'auto_archive_duration' => $this->auto_archive_duration,
-            'locked' => $this->locked,
-        ];
+        return $this->guild?->members->get('id', $this->discord->id)?->getPermissions($this);
     }
 
     /**
-     * @inheritdoc
+     * {@inheritDoc}
+     *
+     * @link https://discord.com/developers/docs/resources/channel#start-thread-without-message-json-params
+     */
+    public function getCreatableAttributes(): array
+    {
+        $attr = [
+            'name' => $this->name,
+        ];
+
+        if ($this->type == Channel::TYPE_PRIVATE_THREAD) {
+            $attr += $this->makeOptionalAttributes([
+                'invitable' => $this->invitable,
+            ]);
+        }
+
+        $attr += $this->makeOptionalAttributes([
+            'auto_archive_duration' => $this->auto_archive_duration,
+            'type' => $this->type,
+            'rate_limit_per_user' => $this->rate_limit_per_user,
+        ]);
+
+        return $attr;
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * @link https://discord.com/developers/docs/resources/channel#modify-channel-json-params-thread
+     */
+    public function getUpdatableAttributes(): array
+    {
+        $attr = [
+            'name' => $this->name,
+            'archived' => $this->archived,
+            'auto_archive_duration' => $this->auto_archive_duration,
+            'locked' => $this->locked,
+            'rate_limit_per_user' => $this->rate_limit_per_user,
+        ];
+
+        if ($this->type == Channel::TYPE_PRIVATE_THREAD) {
+            $attr['invitable'] = $this->invitable;
+        }
+
+        $attr += $this->makeOptionalAttributes([
+            'flags' => $this->flags,
+            'applied_tags' => $this->applied_tags,
+        ]);
+
+        return $attr;
+    }
+
+    /**
+     * {@inheritDoc}
      */
     public function getRepositoryAttributes(): array
     {
         return [
-            'thread_id' => $this->id,
-            'channel_id' => $this->id,
+            'guild_id' => $this->guild_id,
             'parent_id' => $this->parent_id,
+            'channel_id' => $this->id,
+            'thread_id' => $this->id,
         ];
     }
 
@@ -767,7 +900,7 @@ class Thread extends Part
      *
      * @return string A formatted mention.
      */
-    public function __toString()
+    public function __toString(): string
     {
         return "<#{$this->id}>";
     }

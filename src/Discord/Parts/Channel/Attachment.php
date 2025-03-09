@@ -16,7 +16,9 @@ use Discord\Parts\Part;
 /**
  * A message attachment.
  *
- * @see https://discord.com/developers/docs/resources/channel#attachment-object
+ * @link https://discord.com/developers/docs/resources/channel#attachment-object
+ *
+ * @since 7.0.0
  *
  * @property string      $id           Attachment ID.
  * @property string      $filename     Name of file attached.
@@ -24,15 +26,15 @@ use Discord\Parts\Part;
  * @property string|null $content_type The attachment's media type.
  * @property int         $size         Size of file in bytes.
  * @property string      $url          Source url of file.
- * @property string|null $proxy_url    A proxied url of file.
- * @property int|null    $height       Height of file (if image).
- * @property int|null    $width        Width of file (if image).
+ * @property string      $proxy_url    A proxied url of file.
+ * @property ?int|null   $height       Height of file (if image).
+ * @property ?int|null   $width        Width of file (if image).
  * @property bool|null   $ephemeral    Whether this attachment is ephemeral.
  */
 class Attachment extends Part
 {
     /**
-     * @inheritdoc
+     * {@inheritDoc}
      */
     protected $fillable = [
         'id',

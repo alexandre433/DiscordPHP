@@ -16,8 +16,6 @@ use Discord\Builders\MessageBuilder;
 use Discord\Helpers\Collection;
 use Discord\Helpers\Multipart;
 use Discord\Http\Endpoint;
-use Discord\InteractionResponseType;
-use Discord\InteractionType;
 use Discord\Parts\Channel\Channel;
 use Discord\Parts\Channel\Message;
 use Discord\Parts\Guild\Guild;
@@ -25,10 +23,12 @@ use Discord\Parts\Interactions\Command\Choice;
 use Discord\Parts\Interactions\Request\Component as RequestComponent;
 use Discord\Parts\Interactions\Request\InteractionData;
 use Discord\Parts\Part;
+use Discord\Parts\Permissions\ChannelPermission;
+use Discord\Parts\Thread\Thread;
 use Discord\Parts\User\Member;
 use Discord\Parts\User\User;
 use Discord\WebSockets\Event;
-use React\Promise\ExtendedPromiseInterface;
+use React\Promise\PromiseInterface;
 
 use function Discord\poly_strlen;
 use function React\Promise\reject;
@@ -36,28 +36,31 @@ use function React\Promise\reject;
 /**
  * Represents an interaction from Discord.
  *
- * @see https://discord.com/developers/docs/interactions/receiving-and-responding#interactions
+ * @link https://discord.com/developers/docs/interactions/receiving-and-responding#interaction-object
  *
- * @property string               $id             ID of the interaction.
- * @property string               $application_id ID of the application the interaction is for.
- * @property int                  $type           Type of interaction.
- * @property InteractionData|null $data           Data associated with the interaction.
- * @property string|null          $guild_id       ID of the guild the interaction was sent from.
- * @property Guild|null           $guild          Guild the interaction was sent from.
- * @property string|null          $channel_id     ID of the channel the interaction was sent from.
- * @property Channel|null         $channel        Channel the interaction was sent from.
- * @property Member|null          $member         Member who invoked the interaction.
- * @property User|null            $user           User who invoked the interaction.
- * @property string               $token          Continuation token for responding to the interaction.
- * @property int                  $version        Version of interaction.
- * @property Message|null         $message        Message that triggered the interactions, when triggered from message components.
- * @property string|null          $locale         The selected language of the invoking user.
- * @property string|null          $guild_locale   The guild's preferred locale, if invoked in a guild.
+ * @since 7.0.0
+ *
+ * @property      string                 $id              ID of the interaction.
+ * @property      string                 $application_id  ID of the application the interaction is for.
+ * @property      int                    $type            Type of interaction.
+ * @property      InteractionData|null   $data            Data associated with the interaction.
+ * @property      string|null            $guild_id        ID of the guild the interaction was sent from.
+ * @property-read Guild|null             $guild           Guild the interaction was sent from.
+ * @property      string|null            $channel_id      ID of the channel the interaction was sent from.
+ * @property-read Channel|null           $channel         Channel the interaction was sent from.
+ * @property      Member|null            $member          Member who invoked the interaction.
+ * @property      User|null              $user            User who invoked the interaction.
+ * @property      string                 $token           Continuation token for responding to the interaction.
+ * @property-read int                    $version         Version of interaction.
+ * @property      Message|null           $message         Message that triggered the interactions, when triggered from message components.
+ * @property-read ChannelPermission|null $app_permissions Bitwise set of permissions the app or bot has within the channel the interaction was sent from.
+ * @property      string|null            $locale          The selected language of the invoking user.
+ * @property      string|null            $guild_locale    The guild's preferred locale, if invoked in a guild.
  */
 class Interaction extends Part
 {
     /**
-     * @inheritdoc
+     * {@inheritDoc}
      */
     protected $fillable = [
         'id',
@@ -65,20 +68,17 @@ class Interaction extends Part
         'type',
         'data',
         'guild_id',
+        'channel',
         'channel_id',
         'member',
         'user',
         'token',
         'version',
         'message',
+        'app_permissions',
         'locale',
         'guild_locale',
     ];
-
-    /**
-     * @inheritdoc
-     */
-    protected $visible = ['guild', 'channel'];
 
     /**
      * Whether we have responded to the interaction yet.
@@ -87,8 +87,25 @@ class Interaction extends Part
      */
     protected $responded = false;
 
+    const TYPE_PING = 1;
+    const TYPE_APPLICATION_COMMAND = 2;
+    const TYPE_MESSAGE_COMPONENT = 3;
+    const TYPE_APPLICATION_COMMAND_AUTOCOMPLETE = 4;
+    const TYPE_MODAL_SUBMIT = 5;
+
+    const RESPONSE_TYPE_PONG = 1;
+    const RESPONSE_TYPE_CHANNEL_MESSAGE_WITH_SOURCE = 4;
+    const RESPONSE_TYPE_DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE = 5;
+    const RESPONSE_TYPE_DEFERRED_UPDATE_MESSAGE = 6;
+    const RESPONSE_TYPE_UPDATE_MESSAGE = 7;
+    const RESPONSE_TYPE_APPLICATION_COMMAND_AUTOCOMPLETE_RESULT = 8;
+    const RESPONSE_TYPE_MODAL = 9;
+    const RESPONSE_TYPE_PREMIUM_REQUIRED = 10;
+
     /**
      * Returns true if this interaction has been internally responded.
+     *
+     * @return bool The interaction is responded
      */
     public function isResponded(): bool
     {
@@ -111,13 +128,13 @@ class Interaction extends Part
             $adata->guild_id = $this->guild_id;
         }
 
-        return $this->factory->create(InteractionData::class, $adata, true);
+        return $this->createOf(InteractionData::class, $adata);
     }
 
     /**
-     * Returns the guild the interaction was invoked from. Null when invoked via DM.
+     * Returns the guild the interaction was invoked from.
      *
-     * @return Guild|null
+     * @return Guild|null `null` when invoked via DM.
      */
     protected function getGuildAttribute(): ?Guild
     {
@@ -127,30 +144,47 @@ class Interaction extends Part
     /**
      * Returns the channel the interaction was invoked from.
      *
-     * @return Channel|null
+     * @return Channel|Thread|null
      */
-    protected function getChannelAttribute(): ?Channel
+    protected function getChannelAttribute(): ?Part
     {
-        if ($this->guild && $channel = $this->guild->channels->get('id', $this->channel_id)) {
-            return $channel;
+        $channelId = $this->attributes['channel']->id ?? $this->channel_id;
+        if ($guild = $this->guild) {
+            $channels = $guild->channels;
+            if (
+                ! in_array($this->attributes['channel']->type ?? null, [Channel::TYPE_PUBLIC_THREAD, CHANNEL::TYPE_PRIVATE_THREAD, CHANNEL::TYPE_ANNOUNCEMENT_THREAD])
+                && $channel = $channels->get('id', $channelId)
+            ) {
+                return $channel;
+            }
+            foreach ($channels as $parent) {
+                if ($thread = $parent->threads->get('id', $channelId)) {
+                    return $thread;
+                }
+            }
         }
 
-        return $this->discord->getChannel($this->channel_id);
+        return $this->discord->getChannel($channelId);
     }
 
     /**
-     * Returns the member who invoked the interaction. Null when invoked via DM.
+     * Returns the member who invoked the interaction.
      *
-     * @return Member|null
+     * @return Member|null `null` when invoked via DM.
      */
     protected function getMemberAttribute(): ?Member
     {
         if (isset($this->attributes['member'])) {
-            if ($this->guild && $member = $this->guild->members->get('id', $this->attributes['member']->user->id)) {
-                return $member;
+            if ($guild = $this->guild) {
+                if ($member = $guild->members->get('id', $this->attributes['member']->user->id)) {
+                    // @todo Temporary workaround until member is cached from INTERACTION_CREATE event
+                    $member->permissions = $this->attributes['member']->permissions;
+
+                    return $member;
+                }
             }
 
-            return $this->factory->create(Member::class, (array) $this->attributes['member'] + ['guild_id' => $this->guild_id], true);
+            return $this->factory->part(Member::class, (array) $this->attributes['member'] + ['guild_id' => $this->guild_id], true);
         }
 
         return null;
@@ -163,15 +197,15 @@ class Interaction extends Part
      */
     protected function getUserAttribute(): ?User
     {
-        if ($this->member) {
-            return $this->member->user;
+        if ($member = $this->member) {
+            return $member->user;
         }
 
         if (! isset($this->attributes['user'])) {
             return null;
         }
 
-        return $this->factory->create(User::class, $this->attributes['user'], true);
+        return $this->factory->part(User::class, (array) $this->attributes['user'], true);
     }
 
     /**
@@ -181,59 +215,73 @@ class Interaction extends Part
      */
     protected function getMessageAttribute(): ?Message
     {
-        if (isset($this->attributes['message'])) {
-            return $this->factory->create(Message::class, $this->attributes['message'], true);
+        if (! isset($this->attributes['message'])) {
+            return null;
         }
 
-        return null;
+        return $this->factory->part(Message::class, (array) $this->attributes['message'], true);
+    }
+
+    /**
+     * Returns the permissions the app or bot has within the channel the interaction was sent from.
+     *
+     * @return ChannelPermission|null
+     */
+    protected function getAppPermissionsAttribute(): ?ChannelPermission
+    {
+        if (! isset($this->attributes['app_permissions'])) {
+            return null;
+        }
+
+        return $this->factory->part(ChannelPermission::class, ['bitwise' => $this->attributes['app_permissions']], true);
     }
 
     /**
      * Acknowledges an interaction without returning a response.
      * Only valid for message component interactions.
      *
-     * @see https://discord.com/developers/docs/interactions/receiving-and-responding#responding-to-an-interaction
+     * @link https://discord.com/developers/docs/interactions/receiving-and-responding#responding-to-an-interaction
      *
-     * @throws \LogicException
+     * @throws \LogicException Interaction is not Message Component or Modal Submit.
      *
-     * @return ExtendedPromiseInterface
+     * @return PromiseInterface
      */
-    public function acknowledge(): ExtendedPromiseInterface
+    public function acknowledge(): PromiseInterface
     {
-        if ($this->type == InteractionType::APPLICATION_COMMAND) {
+        if ($this->type == self::TYPE_APPLICATION_COMMAND) {
             return $this->acknowledgeWithResponse();
         }
 
-        if (! in_array($this->type, [InteractionType::MESSAGE_COMPONENT, InteractionType::MODAL_SUBMIT])) {
+        if (! in_array($this->type, [self::TYPE_MESSAGE_COMPONENT, self::TYPE_MODAL_SUBMIT])) {
             return reject(new \LogicException('You can only acknowledge message component or modal submit interactions.'));
         }
 
         return $this->respond([
-            'type' => InteractionResponseType::DEFERRED_UPDATE_MESSAGE,
+            'type' => self::RESPONSE_TYPE_DEFERRED_UPDATE_MESSAGE,
         ]);
     }
 
     /**
-     * Acknowledges an interaction, creating a placeholder response message which can be edited later
-     * through the `updateOriginalResponse` function.
+     * Acknowledges an interaction, creating a placeholder response message
+     * which can be edited later through the `updateOriginalResponse` function.
      *
-     * @see https://discord.com/developers/docs/interactions/receiving-and-responding#responding-to-an-interaction
+     * @link https://discord.com/developers/docs/interactions/receiving-and-responding#responding-to-an-interaction
      *
      * @param bool $ephemeral Whether the acknowledge should be ephemeral.
      *
-     * @throws \LogicException
+     * @throws \LogicException Interaction is not Application Command, Message Component, or Modal Submit.
      *
-     * @return ExtendedPromiseInterface
+     * @return PromiseInterface
      */
-    public function acknowledgeWithResponse(bool $ephemeral = false): ExtendedPromiseInterface
+    public function acknowledgeWithResponse(bool $ephemeral = false): PromiseInterface
     {
-        if (! in_array($this->type, [InteractionType::APPLICATION_COMMAND, InteractionType::MESSAGE_COMPONENT, InteractionType::MODAL_SUBMIT])) {
+        if (! in_array($this->type, [self::TYPE_APPLICATION_COMMAND, self::TYPE_MESSAGE_COMPONENT, self::TYPE_MODAL_SUBMIT])) {
             return reject(new \LogicException('You can only acknowledge application command, message component, or modal submit interactions.'));
         }
 
         return $this->respond([
-            'type' => InteractionResponseType::DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
-            'data' => $ephemeral ? ['flags' => 64] : [],
+            'type' => self::RESPONSE_TYPE_DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
+            'data' => $ephemeral ? ['flags' => 64] : null,
         ]);
     }
 
@@ -241,22 +289,22 @@ class Interaction extends Part
      * Updates the message that the interaction was triggered from.
      * Only valid for message component interactions.
      *
-     * @see https://discord.com/developers/docs/interactions/receiving-and-responding#responding-to-an-interaction
+     * @link https://discord.com/developers/docs/interactions/receiving-and-responding#responding-to-an-interaction
      *
      * @param MessageBuilder $builder The new message content.
      *
-     * @throws \LogicException
+     * @throws \LogicException Interaction is not Message Component.
      *
-     * @return ExtendedPromiseInterface
+     * @return PromiseInterface
      */
-    public function updateMessage(MessageBuilder $builder): ExtendedPromiseInterface
+    public function updateMessage(MessageBuilder $builder): PromiseInterface
     {
-        if ($this->type != InteractionType::MESSAGE_COMPONENT) {
+        if (! in_array($this->type, [self::TYPE_MESSAGE_COMPONENT, self::TYPE_MODAL_SUBMIT])) {
             return reject(new \LogicException('You can only update messages that occur due to a message component interaction.'));
         }
 
         return $this->respond([
-            'type' => InteractionResponseType::UPDATE_MESSAGE,
+            'type' => self::RESPONSE_TYPE_UPDATE_MESSAGE,
             'data' => $builder,
         ], $builder->requiresMultipart() ? $builder->toMultipart(false) : null);
     }
@@ -264,42 +312,44 @@ class Interaction extends Part
     /**
      * Retrieves the original interaction response.
      *
-     * @see https://discord.com/developers/docs/interactions/receiving-and-responding#get-original-interaction-response
+     * @link https://discord.com/developers/docs/interactions/receiving-and-responding#get-original-interaction-response
      *
-     * @throws \RuntimeException
+     * @throws \RuntimeException Interaction is not created yet.
      *
-     * @return ExtendedPromiseInterface<Message>
+     * @return PromiseInterface<Message>
      */
-    public function getOriginalResponse(): ExtendedPromiseInterface
+    public function getOriginalResponse(): PromiseInterface
     {
-        if (! $this->responded) {
-            return reject(new \RuntimeException('Interaction has not been responded to.'));
+        if (! $this->created) {
+            return reject(new \RuntimeException('Interaction has not been created yet.'));
         }
 
         return $this->http->get(Endpoint::bind(Endpoint::ORIGINAL_INTERACTION_RESPONSE, $this->application_id, $this->token))
             ->then(function ($response) {
-                return $this->factory->create(Message::class, $response, true);
+                $this->responded = true;
+
+                return $this->factory->part(Message::class, (array) $response, true);
             });
     }
 
     /**
      * Updates the original interaction response.
      *
-     * @see https://discord.com/developers/docs/interactions/receiving-and-responding#edit-original-interaction-response
+     * @link https://discord.com/developers/docs/interactions/receiving-and-responding#edit-original-interaction-response
      *
      * @param MessageBuilder $builder New message contents.
      *
-     * @throws \RuntimeException
+     * @throws \RuntimeException Interaction is not responded yet.
      *
-     * @return ExtendedPromiseInterface<Message>
+     * @return PromiseInterface<Message>
      */
-    public function updateOriginalResponse(MessageBuilder $builder): ExtendedPromiseInterface
+    public function updateOriginalResponse(MessageBuilder $builder): PromiseInterface
     {
         if (! $this->responded) {
             return reject(new \RuntimeException('Interaction has not been responded to.'));
         }
 
-        return (function () use ($builder): ExtendedPromiseInterface {
+        return (function () use ($builder): PromiseInterface {
             if ($builder->requiresMultipart()) {
                 $multipart = $builder->toMultipart();
 
@@ -307,21 +357,19 @@ class Interaction extends Part
             }
 
             return $this->http->patch(Endpoint::bind(Endpoint::ORIGINAL_INTERACTION_RESPONSE, $this->application_id, $this->token), $builder);
-        })()->then(function ($response) {
-            return $this->factory->create(Message::class, $response, true);
-        });
+        })()->then(fn ($response) => $this->factory->part(Message::class, (array) $response, true));
     }
 
     /**
      * Deletes the original interaction response.
      *
-     * @see https://discord.com/developers/docs/interactions/receiving-and-responding#delete-original-interaction-response
+     * @link https://discord.com/developers/docs/interactions/receiving-and-responding#delete-original-interaction-response
      *
-     * @throws \RuntimeException
+     * @throws \RuntimeException Interaction is not responded yet.
      *
-     * @return ExtendedPromiseInterface
+     * @return PromiseInterface
      */
-    public function deleteOriginalResponse(): ExtendedPromiseInterface
+    public function deleteOriginalResponse(): PromiseInterface
     {
         if (! $this->responded) {
             return reject(new \RuntimeException('Interaction has not been responded to.'));
@@ -333,26 +381,26 @@ class Interaction extends Part
     /**
      * Sends a follow-up message to the interaction.
      *
-     * @see https://discord.com/developers/docs/interactions/receiving-and-responding#create-followup-message
+     * @link https://discord.com/developers/docs/interactions/receiving-and-responding#create-followup-message
      *
      * @param MessageBuilder $builder   Message to send.
      * @param bool           $ephemeral Whether the created follow-up should be ephemeral. Will be ignored if the respond is previously ephemeral.
      *
-     * @throws \RuntimeException
+     * @throws \RuntimeException Interaction is not responded yet.
      *
-     * @return ExtendedPromiseInterface<Message>
+     * @return PromiseInterface<Message>
      */
-    public function sendFollowUpMessage(MessageBuilder $builder, bool $ephemeral = false): ExtendedPromiseInterface
+    public function sendFollowUpMessage(MessageBuilder $builder, bool $ephemeral = false): PromiseInterface
     {
-        if (! $this->responded && $this->type != InteractionType::MESSAGE_COMPONENT) {
+        if (! $this->responded && $this->type != self::TYPE_MESSAGE_COMPONENT) {
             return reject(new \RuntimeException('Cannot create a follow-up message as the interaction has not been responded to.'));
         }
 
         if ($ephemeral) {
-            $builder->_setFlags(Message::FLAG_EPHEMERAL);
+            $builder->setFlags(Message::FLAG_EPHEMERAL);
         }
 
-        return (function () use ($builder): ExtendedPromiseInterface {
+        return (function () use ($builder): PromiseInterface {
             if ($builder->requiresMultipart()) {
                 $multipart = $builder->toMultipart();
 
@@ -360,35 +408,37 @@ class Interaction extends Part
             }
 
             return $this->http->post(Endpoint::bind(Endpoint::CREATE_INTERACTION_FOLLOW_UP, $this->application_id, $this->token), $builder);
-        })()->then(function ($response) {
-            return $this->factory->create(Message::class, $response, true);
-        });
+        })()->then(fn ($response) => $this->factory->part(Message::class, (array) $response, true));
     }
 
     /**
      * Responds to the interaction with a message.
      *
-     * @see https://discord.com/developers/docs/interactions/receiving-and-responding#create-interaction-response
+     * @link https://discord.com/developers/docs/interactions/receiving-and-responding#create-interaction-response
      *
      * @param MessageBuilder $builder   Message to respond with.
      * @param bool           $ephemeral Whether the created message should be ephemeral.
      *
-     * @throws \LogicException
+     * @throws \LogicException Interaction is not Application Command, Message Component, or Modal Submit.
      *
-     * @return ExtendedPromiseInterface
+     * @return PromiseInterface
      */
-    public function respondWithMessage(MessageBuilder $builder, bool $ephemeral = false): ExtendedPromiseInterface
+    public function respondWithMessage(MessageBuilder|string $builder, bool $ephemeral = false): PromiseInterface
     {
-        if (! in_array($this->type, [InteractionType::APPLICATION_COMMAND, InteractionType::MESSAGE_COMPONENT, InteractionType::MODAL_SUBMIT])) {
+        if (! in_array($this->type, [self::TYPE_APPLICATION_COMMAND, self::TYPE_MESSAGE_COMPONENT, self::TYPE_MODAL_SUBMIT])) {
             return reject(new \LogicException('You can only acknowledge application command, message component, or modal submit interactions.'));
         }
 
+        if (is_string($builder)) {
+            $builder = MessageBuilder::new()->setContent($builder);
+        }
+
         if ($ephemeral) {
-            $builder->_setFlags(Message::FLAG_EPHEMERAL);
+            $builder->setFlags(Message::FLAG_EPHEMERAL);
         }
 
         return $this->respond([
-            'type' => InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
+            'type' => self::RESPONSE_TYPE_CHANNEL_MESSAGE_WITH_SOURCE,
             'data' => $builder,
         ], $builder->requiresMultipart() ? $builder->toMultipart(false) : null);
     }
@@ -396,19 +446,19 @@ class Interaction extends Part
     /**
      * Responds to the interaction with a payload.
      *
-     * This is a seperate function so that it can be overloaded when responding via
-     * webhook.
+     * This is a separate function so that it can be overloaded when responding
+     * via webhook.
      *
-     * @see https://discord.com/developers/docs/interactions/receiving-and-responding#create-interaction-response
+     * @link https://discord.com/developers/docs/interactions/receiving-and-responding#create-interaction-response
      *
      * @param array          $payload   Response payload.
      * @param Multipart|null $multipart Optional multipart payload.
      *
-     * @throws \RuntimeException
+     * @throws \RuntimeException Interaction is already responded.
      *
-     * @return ExtendedPromiseInterface
+     * @return PromiseInterface
      */
-    protected function respond(array $payload, ?Multipart $multipart = null): ExtendedPromiseInterface
+    protected function respond(array $payload, ?Multipart $multipart = null): PromiseInterface
     {
         if ($this->responded) {
             return reject(new \RuntimeException('Interaction has already been responded to.'));
@@ -434,22 +484,22 @@ class Interaction extends Part
     /**
      * Updates a non ephemeral follow up message.
      *
-     * @see https://discord.com/developers/docs/interactions/receiving-and-responding#edit-followup-message
+     * @link https://discord.com/developers/docs/interactions/receiving-and-responding#edit-followup-message
      *
      * @param string         $message_id Message to update.
      * @param MessageBuilder $builder    New message contents.
      *
-     * @throws \RuntimeException
+     * @throws \RuntimeException Interaction is not responded yet.
      *
-     * @return ExtendedPromiseInterface<Message>
+     * @return PromiseInterface<Message>
      */
-    public function updateFollowUpMessage(string $message_id, MessageBuilder $builder)
+    public function updateFollowUpMessage(string $message_id, MessageBuilder $builder): PromiseInterface
     {
         if (! $this->responded) {
             return reject(new \RuntimeException('Cannot create a follow-up message as the interaction has not been responded to.'));
         }
 
-        return (function () use ($message_id, $builder): ExtendedPromiseInterface {
+        return (function () use ($message_id, $builder): PromiseInterface {
             if ($builder->requiresMultipart()) {
                 $multipart = $builder->toMultipart();
 
@@ -457,46 +507,46 @@ class Interaction extends Part
             }
 
             return $this->http->patch(Endpoint::bind(Endpoint::INTERACTION_FOLLOW_UP, $this->application_id, $this->token, $message_id), $builder);
-        })()->then(function ($response) {
-            return $this->factory->create(Message::class, $response, true);
-        });
+        })()->then(fn ($response) => $this->factory->part(Message::class, (array) $response, true));
     }
 
     /**
      * Retrieves a non ephemeral follow up message.
      *
-     * @see https://discord.com/developers/docs/interactions/receiving-and-responding#get-followup-message
+     * @link https://discord.com/developers/docs/interactions/receiving-and-responding#get-followup-message
      *
      * @param string $message_id Message to get.
      *
-     * @throws \RuntimeException
+     * @throws \RuntimeException Interaction is not created yet.
      *
-     * @return ExtendedPromiseInterface<Message>
+     * @return PromiseInterface<Message>
      */
-    public function getFollowUpMessage(string $message_id): ExtendedPromiseInterface
+    public function getFollowUpMessage(string $message_id): PromiseInterface
     {
-        if (! $this->responded) {
-            return reject(new \RuntimeException('Interaction has not been responded to.'));
+        if (! $this->created) {
+            return reject(new \RuntimeException('Interaction has not been created yet.'));
         }
 
         return $this->http->get(Endpoint::bind(Endpoint::INTERACTION_FOLLOW_UP, $this->application_id, $this->token, $message_id))
             ->then(function ($response) {
-                return $this->factory->create(Message::class, $response, true);
+                $this->responded = true;
+
+                return $this->factory->part(Message::class, (array) $response, true);
             });
     }
 
     /**
-     * Deletes a non ephemeral follow up message.
+     * Deletes a follow up message.
      *
-     * @see https://discord.com/developers/docs/interactions/receiving-and-responding#delete-followup-message
+     * @link https://discord.com/developers/docs/interactions/receiving-and-responding#delete-followup-message
      *
      * @param string $message_id Message to delete.
      *
-     * @throws \RuntimeException
+     * @throws \RuntimeException Interaction is not responded yet.
      *
-     * @return ExtendedPromiseInterface
+     * @return PromiseInterface
      */
-    public function deleteFollowUpMessage(string $message_id): ExtendedPromiseInterface
+    public function deleteFollowUpMessage(string $message_id): PromiseInterface
     {
         if (! $this->responded) {
             return reject(new \RuntimeException('Interaction has not been responded to.'));
@@ -508,22 +558,22 @@ class Interaction extends Part
     /**
      * Responds to the interaction with auto complete suggestions.
      *
-     * @see https://discord.com/developers/docs/interactions/receiving-and-responding#responding-to-an-interaction
+     * @link https://discord.com/developers/docs/interactions/receiving-and-responding#responding-to-an-interaction
      *
-     * @param array|Choice[] $choice Autocomplete choices (max of 25 choices)
+     * @param array|Choice[] $choices Autocomplete choices (max of 25 choices)
      *
-     * @throws \LogicException
+     * @throws \LogicException Interaction is not Autocomplete.
      *
-     * @return ExtendedPromiseInterface
+     * @return PromiseInterface
      */
-    public function autoCompleteResult(array $choices): ExtendedPromiseInterface
+    public function autoCompleteResult(array $choices): PromiseInterface
     {
-        if ($this->type != InteractionType::APPLICATION_COMMAND_AUTOCOMPLETE) {
+        if ($this->type != self::TYPE_APPLICATION_COMMAND_AUTOCOMPLETE) {
             return reject(new \LogicException('You can only respond command option results with auto complete interactions.'));
         }
 
         return $this->respond([
-            'type' => InteractionResponseType::APPLICATION_COMMAND_AUTOCOMPLETE_RESULT,
+            'type' => self::RESPONSE_TYPE_APPLICATION_COMMAND_AUTOCOMPLETE_RESULT,
             'data' => ['choices' => $choices],
         ]);
     }
@@ -531,21 +581,21 @@ class Interaction extends Part
     /**
      * Responds to the interaction with a popup modal.
      *
-     * @see https://discord.com/developers/docs/interactions/receiving-and-responding#responding-to-an-interaction
+     * @link https://discord.com/developers/docs/interactions/receiving-and-responding#responding-to-an-interaction
      *
      * @param string            $title      The title of the popup modal, max 45 characters
-     * @param string            $custom_id  A developer-defined identifier for the component, max 100 characters
+     * @param string            $custom_id  Developer-defined identifier for the component, max 100 characters
      * @param array|Component[] $components Between 1 and 5 (inclusive) components that make up the modal contained in Action Row
      * @param callable|null     $submit     The function to call once modal is submitted.
      *
-     * @throws \LogicException
-     * @throws \LengthException
+     * @throws \LogicException  Interaction is Ping or Modal Submit.
+     * @throws \LengthException Modal title is longer than 45 characters.
      *
-     * @return ExtendedPromiseInterface
+     * @return PromiseInterface
      */
-    public function showModal(string $title, string $custom_id, array $components, ?callable $submit = null): ExtendedPromiseInterface
+    public function showModal(string $title, string $custom_id, array $components, ?callable $submit = null): PromiseInterface
     {
-        if (in_array($this->type, [InteractionType::PING, InteractionType::MODAL_SUBMIT])) {
+        if (in_array($this->type, [self::TYPE_PING, self::TYPE_MODAL_SUBMIT])) {
             return reject(new \LogicException('You cannot pop up a modal from a ping or modal submit interaction.'));
         }
 
@@ -554,16 +604,16 @@ class Interaction extends Part
         }
 
         return $this->respond([
-            'type' => InteractionResponseType::MODAL,
+            'type' => self::RESPONSE_TYPE_MODAL,
             'data' => [
                 'title' => $title,
                 'custom_id' => $custom_id,
                 'components' => $components,
             ],
-        ])->then(function () use ($custom_id, $submit) {
+        ])->then(function ($response) use ($custom_id, $submit) {
             if ($submit) {
-                $this->discord->once(Event::INTERACTION_CREATE, function (Interaction $interaction) use ($custom_id, $submit) {
-                    if ($interaction->type == InteractionType::MODAL_SUBMIT && $interaction->data->custom_id == $custom_id) {
+                $listener = function (Interaction $interaction) use ($custom_id, $submit, &$listener) {
+                    if ($interaction->type == self::TYPE_MODAL_SUBMIT && $interaction->data->custom_id == $custom_id) {
                         $components = Collection::for(RequestComponent::class, 'custom_id');
                         foreach ($interaction->data->components as $actionrow) {
                             if ($actionrow->type == Component::TYPE_ACTION_ROW) {
@@ -573,9 +623,13 @@ class Interaction extends Part
                             }
                         }
                         $submit($interaction, $components);
+                        $this->discord->removeListener(Event::INTERACTION_CREATE, $listener);
                     }
-                });
+                };
+                $this->discord->on(Event::INTERACTION_CREATE, $listener);
             }
+
+            return $response;
         });
     }
 }

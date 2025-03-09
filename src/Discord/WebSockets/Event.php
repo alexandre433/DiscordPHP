@@ -14,13 +14,13 @@ namespace Discord\WebSockets;
 use Discord\Discord;
 use Discord\Factory\Factory;
 use Discord\Http\Http;
-use Discord\Helpers\Deferred;
+use Discord\Repository\Guild\MemberRepository;
 use Evenement\EventEmitterTrait;
-use React\Promise\PromiseInterface;
 
 /**
- * Contains constants for WebSocket events as well as handlers
- * for the events.
+ * Contains constants for WebSocket events as well as handlers for the events.
+ *
+ * @since 2.1.3
  */
 abstract class Event
 {
@@ -68,9 +68,22 @@ abstract class Event
     public const INTEGRATION_UPDATE = 'INTEGRATION_UPDATE';
     public const INTEGRATION_DELETE = 'INTEGRATION_DELETE';
     public const WEBHOOKS_UPDATE = 'WEBHOOKS_UPDATE';
+    public const APPLICATION_COMMAND_PERMISSIONS_UPDATE = 'APPLICATION_COMMAND_PERMISSIONS_UPDATE';
 
     public const INVITE_CREATE = 'INVITE_CREATE';
     public const INVITE_DELETE = 'INVITE_DELETE';
+
+    public const AUTO_MODERATION_RULE_CREATE = 'AUTO_MODERATION_RULE_CREATE';
+    public const AUTO_MODERATION_RULE_UPDATE = 'AUTO_MODERATION_RULE_UPDATE';
+    public const AUTO_MODERATION_RULE_DELETE = 'AUTO_MODERATION_RULE_DELETE';
+    public const AUTO_MODERATION_ACTION_EXECUTION = 'AUTO_MODERATION_ACTION_EXECUTION';
+
+    public const GUILD_AUDIT_LOG_ENTRY_CREATE = 'GUILD_AUDIT_LOG_ENTRY_CREATE';
+
+    public const GUILD_SOUNDBOARD_SOUND_CREATE = 'GUILD_SOUNDBOARD_SOUND_CREATE';
+    public const GUILD_SOUNDBOARD_SOUND_UPDATE = 'GUILD_SOUNDBOARD_SOUND_UPDATE';
+    public const GUILD_SOUNDBOARD_SOUND_DELETE = 'GUILD_SOUNDBOARD_SOUND_DELETE';
+    public const SOUNDBOARD_SOUNDS = 'SOUNDBOARD_SOUNDS';
 
     // Channel
     public const CHANNEL_CREATE = 'CHANNEL_CREATE';
@@ -104,6 +117,15 @@ abstract class Event
     public const MESSAGE_REACTION_REMOVE = 'MESSAGE_REACTION_REMOVE';
     public const MESSAGE_REACTION_REMOVE_ALL = 'MESSAGE_REACTION_REMOVE_ALL';
     public const MESSAGE_REACTION_REMOVE_EMOJI = 'MESSAGE_REACTION_REMOVE_EMOJI';
+    public const MESSAGE_POLL_VOTE_ADD = 'MESSAGE_POLL_VOTE_ADD';
+    public const MESSAGE_POLL_VOTE_REMOVE = 'MESSAGE_POLL_VOTE_REMOVE';
+
+    /**
+     * The Discord client instance.
+     *
+     * @var Discord Client.
+     */
+    protected $discord;
 
     /**
      * The HTTP client.
@@ -120,49 +142,60 @@ abstract class Event
     protected $factory;
 
     /**
-     * The Discord client instance.
-     *
-     * @var Discord Client.
-     */
-    protected $discord;
-
-    /**
      * Constructs an event.
      *
-     * @param Http    $http    The HTTP client.
-     * @param Factory $factory The factory.
      * @param Discord $discord The Discord client.
      */
-    public function __construct(Http $http, Factory $factory, Discord $discord)
+    public function __construct(Discord $discord)
     {
-        $this->http = $http;
-        $this->factory = $factory;
         $this->discord = $discord;
+        $this->http = $discord->getHttpClient();
+        $this->factory = $discord->getFactory();
     }
 
     /**
-     * Transforms the given data, and updates the
-     * Discord instance if necessary.
+     * Transforms the given data, and updates the Discord instance if necessary.
      *
-     * @param Deferred     $deferred The promise to use
-     * @param array|object $data     The data that was sent with the WebSocket
+     * @param object $data The data that was sent with the WebSocket.
      *
-     * @return void|PromiseInterface
+     * @return \Generator
+     *
+     * @since 10.0.0 Changed args from `Deferred &$deferred, $data` to `$data`, changed return from `void` to `Generator`.
+     * @since 4.0.0
      */
-    abstract public function handle(Deferred &$deferred, $data);
+    abstract public function handle($data);
 
     /**
      * Cache User repository from Event data.
      *
-     * @param object $userdata
+     * @param object $userdata `$data->user` or `$data->member->user`
+     *
+     * @since 7.0.0
      */
-    protected function cacheUser($userdata)
+    protected function cacheUser(object $userdata): void
     {
-        // User caching
-        if ($user = $this->discord->users->get('id', $userdata->id)) {
+        $users = $this->discord->users;
+        if ($user = $users->get('id', $userdata->id)) {
             $user->fill((array) $userdata);
         } else {
-            $this->discord->users->pushItem($this->factory->create(\Discord\Parts\User\User::class, $userdata, true));
+            $users->pushItem($users->create($userdata, true));
+        }
+    }
+
+    /**
+     * Cache Member repository from Event data.
+     *
+     * @param MemberRepository $members    `$guild->members`
+     * @param array            $memberdata `(array) $data->member`
+     *
+     * @since 10.0.0
+     */
+    protected function cacheMember(MemberRepository $members, array $memberdata): void
+    {
+        if ($member = $members->get('id', $memberdata['user']->id)) {
+            $member->fill($memberdata);
+        } else {
+            $members->pushItem($members->create($memberdata, true));
         }
     }
 

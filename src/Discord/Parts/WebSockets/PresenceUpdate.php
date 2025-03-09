@@ -12,6 +12,7 @@
 namespace Discord\Parts\WebSockets;
 
 use Discord\Helpers\Collection;
+use Discord\Helpers\CollectionInterface;
 use Discord\Parts\Guild\Guild;
 use Discord\Parts\Guild\Role;
 use Discord\Parts\Part;
@@ -20,35 +21,51 @@ use Discord\Parts\User\Activity;
 use Discord\Parts\User\User;
 
 /**
- * A PresenceUpdate part is used when the `PRESENCE_UPDATE` event is fired on the WebSocket. It contains
- * information about the users presence such as their status (online/away) and their current game.
+ * A PresenceUpdate part is used when the `PRESENCE_UPDATE` event is fired on
+ * the WebSocket. It contains information about the users presence such as their
+ * status (online/away) and their current game.
  *
- * @see https://discord.com/developers/docs/topics/gateway#presence
+ * @since 2.1.3
  *
- * @property User                  $user           The user that the presence update affects.
- * @property string                $guild_id       The unique identifier of the guild that the presence update affects.
- * @property Guild|null            $guild          The guild that the presence update affects.
- * @property string                $status         The updated status of the user.
- * @property Collection|Activity[] $activities     The activities of the user.
- * @property Activity              $game           The updated game of the user.
- * @property object                $client_status  Status of the client.
- * @property string|null           $desktop_status Status of the user on their desktop client. Null if they are not active on desktop.
- * @property string|null           $mobile_status  Status of the user on their mobile client. Null if they are not active on mobile.
- * @property string|null           $web_status     Status of the user on their web client. Null if they are not active on web.
- * @property Member                $member         The member that the presence update affects.
- * @property Collection|Role[]     $roles          Roles that the user has in the guild.
+ * @link https://discord.com/developers/docs/topics/gateway-events#presence
+ *
+ * @property      User                  $user           The user that the presence update affects.
+ * @property      string                $guild_id       The unique identifier of the guild that the presence update affects.
+ * @property-read Guild|null            $guild          The guild that the presence update affects.
+ * @property      string                $status         The updated status of the user.
+ * @property      CollectionInterface|Activity[] $activities     The activities of the user.
+ * @property-read Activity              $game           The updated game of the user.
+ * @property      object                $client_status  Status of the client.
+ * @property      string|null           $desktop_status Status of the user on their desktop client. Null if they are not active on desktop.
+ * @property      string|null           $mobile_status  Status of the user on their mobile client. Null if they are not active on mobile.
+ * @property      string|null           $web_status     Status of the user on their web client. Null if they are not active on web.
+ *
+ * @property-read Member            $member The member that the presence update affects.
+ * @property-read CollectionInterface|Role[] $roles  Roles that the user has in the guild.
  */
 class PresenceUpdate extends Part
 {
     /**
-     * @inheritdoc
+     * {@inheritDoc}
      */
-    protected $fillable = ['user', 'guild_id', 'status', 'activities', 'client_status'];
+    protected $fillable = [
+        'user',
+        'guild_id',
+        'status',
+        'activities',
+        'client_status',
+    ];
 
     /**
-     * @inheritDoc
+     * {@inheritDoc}
      */
-    protected $visible = ['guild', 'game', 'desktop_status', 'mobile_status', 'web_status', 'member', 'roles'];
+    protected $visible = [
+        'game',
+
+        // @internal
+        'member',
+        'roles',
+    ];
 
     /**
      * Gets the user attribute.
@@ -57,7 +74,7 @@ class PresenceUpdate extends Part
      */
     protected function getUserAttribute(): User
     {
-        if ($user = $this->discord->users->offsetGet($this->attributes['user']->id)) {
+        if ($user = $this->discord->users->get('id', $this->attributes['user']->id)) {
             return $user;
         }
 
@@ -77,14 +94,14 @@ class PresenceUpdate extends Part
     /**
      * Gets the activities attribute.
      *
-     * @return Collection|Activity[]
+     * @return CollectionInterface|Activity[]
      */
-    protected function getActivitiesAttribute()
+    protected function getActivitiesAttribute(): CollectionInterface
     {
         $collection = Collection::for(Activity::class, null);
 
         foreach ($this->attributes['activities'] ?? [] as $activity) {
-            $collection->push($this->factory->create(Activity::class, $activity, true));
+            $collection->pushItem($this->factory->part(Activity::class, (array) $activity, true));
         }
 
         return $collection;
@@ -95,9 +112,9 @@ class PresenceUpdate extends Part
      *
      * @return Activity|null The game attribute.
      */
-    protected function getGameAttribute(): ?Part
+    protected function getGameAttribute(): ?Activity
     {
-        return $this->activities->first();
+        return $this->activities->get('type', Activity::TYPE_GAME);
     }
 
     /**
@@ -137,8 +154,8 @@ class PresenceUpdate extends Part
      */
     protected function getMemberAttribute(): ?Member
     {
-        if (isset($this->attributes['user']) && $this->guild) {
-            return $this->guild->members->offsetGet($this->attributes['user']->id);
+        if (isset($this->attributes['user']) && $guild = $this->guild) {
+            return $guild->members->get('id', $this->attributes['user']->id);
         }
 
         return null;
@@ -147,10 +164,14 @@ class PresenceUpdate extends Part
     /**
      * Returns the users roles.
      *
-     * @return Collection|Role[]
+     * @return CollectionInterface|Role[]
      */
-    protected function getRolesAttribute(): Collection
+    protected function getRolesAttribute(): CollectionInterface
     {
-        return $this->member->roles ?? new Collection();
+        if ($member = $this->member) {
+            return $member->roles;
+        }
+
+        return Collection::for(Role::class);
     }
 }

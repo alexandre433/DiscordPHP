@@ -11,33 +11,37 @@
 
 namespace Discord\Repository\Guild;
 
-use Discord\Helpers\Deferred;
 use Discord\Http\Endpoint;
 use Discord\Parts\Guild\Ban;
 use Discord\Parts\User\Member;
+use Discord\Parts\User\User;
 use Discord\Repository\AbstractRepository;
-use React\Promise\ExtendedPromiseInterface;
+use React\Promise\PromiseInterface;
+use Symfony\Component\OptionsResolver\OptionsResolver;
 
 /**
- * Contains bans on users.
+ * Contains bans for users of a guild.
  *
- * @see \Discord\Parts\Guild\Ban
+ * @see Ban
  * @see \Discord\Parts\Guild\Guild
  *
- * @method Ban|null get(string $discrim, $key)  Gets an item from the collection.
- * @method Ban|null first()                     Returns the first element of the collection.
- * @method Ban|null pull($key, $default = null) Pulls an item from the repository, removing and returning the item.
- * @method Ban|null find(callable $callback)    Runs a filter callback over the repository.
+ * @since 4.0.0
+ *
+ * @method Ban|null get(string $discrim, $key)
+ * @method Ban|null pull(string|int $key, $default = null)
+ * @method Ban|null first()
+ * @method Ban|null last()
+ * @method Ban|null find(callable $callback)
  */
 class BanRepository extends AbstractRepository
 {
     /**
-     * @inheritdoc
+     * {@inheritDoc}
      */
     protected $discrim = 'user_id';
 
     /**
-     * @inheritdoc
+     * {@inheritDoc}
      */
     protected $endpoints = [
         'all' => Endpoint::GUILD_BANS,
@@ -46,69 +50,87 @@ class BanRepository extends AbstractRepository
     ];
 
     /**
-     * @inheritdoc
+     * {@inheritDoc}
      */
     protected $class = Ban::class;
 
     /**
      * Bans a member from the guild.
      *
-     * @see https://discord.com/developers/docs/resources/guild#create-guild-ban
+     * @link https://discord.com/developers/docs/resources/guild#create-guild-ban
      *
-     * @param Member|string $member
-     * @param int|null      $daysToDeleteMessages
-     * @param string|null   $reason
+     * @param User|Member|string $user    The User to ban.
+     * @param array              $options Array of Ban options 'delete_message_seconds' or 'delete_message_days' (deprecated).
+     * @param string|null        $reason  Reason for Audit Log.
      *
-     * @return ExtendedPromiseInterface
+     * @return PromiseInterface<Ban>
      */
-    public function ban($member, ?int $daysToDeleteMessages = null, ?string $reason = null): ExtendedPromiseInterface
+    public function ban($user, array $options = [], ?string $reason = null): PromiseInterface
     {
-        $deferred = new Deferred();
-        $content = [];
         $headers = [];
 
-        if ($member instanceof Member) {
-            $member = $member->id;
+        if ($user instanceof Member) {
+            $user = $user->user;
+        } elseif (! ($user instanceof User)) {
+            $user = $this->factory->part(User::class, ['id' => $user], true);
         }
 
-        if (! is_null($daysToDeleteMessages)) {
-            $content['delete_message_days'] = $daysToDeleteMessages;
-        }
+        $resolver = new OptionsResolver();
+        $resolver->setDefined([
+            'delete_message_seconds',
+            'delete_message_days',
+        ])
+        ->setAllowedTypes('delete_message_seconds', 'int')
+        ->setAllowedTypes('delete_message_days', ['int', 'null'])
+        ->setAllowedValues('delete_message_seconds', function ($value) {
+            return $value >= 0 && $value <= 604800;
+        })
+        ->setAllowedValues('delete_message_days', function ($value) {
+            return $value === null || ($value >= 0 && $value <= 7);
+        });
 
-        if (! is_null($reason)) {
+        $content = $resolver->resolve($options);
+
+        if (isset($reason)) {
             $headers['X-Audit-Log-Reason'] = $reason;
         }
 
-        $this->http->put(
-            Endpoint::bind(Endpoint::GUILD_BAN, $this->vars['guild_id'], $member),
+        return $this->http->put(
+            Endpoint::bind(Endpoint::GUILD_BAN, $this->vars['guild_id'], $user->id),
             empty($content) ? null : $content,
             $headers
-        )->done(function ($response) use ($deferred) {
-            $ban = $this->factory->create(Ban::class, $response, true);
-            $this->push($ban);
-            $deferred->resolve($ban);
-        }, [$deferred, 'reject']);
+        )->then(function () use ($user, $reason) {
+            /** @var Ban */
+            $ban = $this->factory->part(Ban::class, [
+                'user' => (object) $user->getRawAttributes(),
+                'reason' => $reason,
+                'guild_id' => $this->vars['guild_id'],
+            ], true);
 
-        return $deferred->promise();
+            return $this->cache->set($ban->user_id, $ban)->then(fn () => $ban);
+        });
     }
 
     /**
      * Unbans a member from the guild.
      *
-     * @see https://discord.com/developers/docs/resources/guild#remove-guild-ban
+     * @link https://discord.com/developers/docs/resources/guild#remove-guild-ban
      *
-     * @param Member|Ban|string $member
+     * @param User|Ban|string $ban    User or Ban Part, or User ID
+     * @param string|null     $reason Reason for Audit Log.
      *
-     * @return ExtendedPromiseInterface
+     * @return PromiseInterface
      */
-    public function unban($member): ExtendedPromiseInterface
+    public function unban($ban, ?string $reason = null): PromiseInterface
     {
-        if ($member instanceof Member) {
-            $member = $member->id;
-        } elseif ($member instanceof Ban) {
-            $member = $member->user_id;
+        if ($ban instanceof User || $ban instanceof Member) {
+            $ban = $ban->id;
         }
 
-        return $this->delete($member);
+        if (is_scalar($ban)) {
+            return $this->cache->get($ban)->then(fn ($ban) => $this->delete($ban, $reason));
+        }
+
+        return $this->delete($ban, $reason);
     }
 }

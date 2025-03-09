@@ -11,32 +11,27 @@
 
 namespace Discord\Helpers;
 
+use Discord\Exceptions\BufferTimedOutException;
 use Evenement\EventEmitter;
-use Exception;
 use React\EventLoop\LoopInterface;
-use React\Promise\ExtendedPromiseInterface;
+use React\Promise\Deferred;
+use React\Promise\PromiseInterface;
 use React\Stream\WritableStreamInterface;
-use RuntimeException;
 
+/**
+ * @since 6.0.0
+ */
 class Buffer extends EventEmitter implements WritableStreamInterface
 {
     /**
-     * Pointer to the head of the buffer.
-     *
-     * @var int
-     */
-    private $readPointer = 0;
-    
-    /**
      * Internal buffer.
      *
-     * @var char[]
+     * @var string
      */
-    private $buffer = [];
+    private $buffer = '';
 
     /**
-     * Array of deferred reads waiting to
-     * be resolved.
+     * Array of deferred reads waiting to be resolved.
      *
      * @var Deferred[]|int[]
      */
@@ -63,7 +58,7 @@ class Buffer extends EventEmitter implements WritableStreamInterface
     }
 
     /**
-     * @inheritdoc
+     * {@inheritDoc}
      */
     public function write($data): bool
     {
@@ -71,9 +66,7 @@ class Buffer extends EventEmitter implements WritableStreamInterface
             return false;
         }
 
-        for ($i = 0; $i < strlen($data); $i++) {
-            $this->buffer[] = $data[$i];
-        }
+        $this->buffer .= (string) $data;
 
         foreach ($this->reads as $key => [$deferred, $length]) {
             if (($output = $this->readRaw($length)) !== false) {
@@ -87,21 +80,17 @@ class Buffer extends EventEmitter implements WritableStreamInterface
 
     /**
      * Reads from the buffer and returns in a string.
-     * Returns false if there were not enough bytes in
-     * the buffer.
+     * Returns false if there were not enough bytes in the buffer.
      *
      * @param int $length Number of bytes to read.
      *
-     * @return mixed The bytes read, or false if not enough bytes are present.
+     * @return string|bool The bytes read, or false if not enough bytes are present.
      */
     private function readRaw(int $length)
     {
-        if ((count($this->buffer) - $this->readPointer) >= $length) {
-            $output = '';
-
-            for ($i = 0; $i < $length; $i++) {
-                $output .= $this->buffer[$this->readPointer++];
-            }
+        if (strlen($this->buffer) >= $length) {
+            $output = substr($this->buffer, 0, $length);
+            $this->buffer = substr($this->buffer, $length);
 
             return $output;
         }
@@ -111,18 +100,18 @@ class Buffer extends EventEmitter implements WritableStreamInterface
 
     /**
      * Reads from the buffer and returns a promise.
-     * The promise will resolve when there are enough bytes
-     * in the buffer to read.
+     * The promise will resolve when there are enough bytes in the buffer to
+     * read.
      *
      * @param int         $length  Number of bytes to read.
      * @param null|string $format  Format to read the bytes in. See `pack()`.
      * @param int         $timeout Time in milliseconds before the read times out.
      *
-     * @return ExtendedPromiseInterface<mixed, RuntimeException>
+     * @return PromiseInterface<mixed, \RuntimeException>
      *
-     * @throws RuntimeException When there is an error unpacking the read bytes.
+     * @throws \RuntimeException When there is an error unpacking the read bytes.
      */
-    public function read(int $length, ?string $format = null, ?int $timeout = -1): ExtendedPromiseInterface
+    public function read(int $length, ?string $format = null, ?int $timeout = -1): PromiseInterface
     {
         $deferred = new Deferred();
 
@@ -131,14 +120,16 @@ class Buffer extends EventEmitter implements WritableStreamInterface
         } else {
             $this->reads[] = [$deferred, $length];
 
-            if ($timeout >= 0 && $this->loop !== null) {
+            if ($timeout > 0 && $this->loop !== null) {
                 $timer = $this->loop->addTimer($timeout / 1000, function () use ($deferred) {
-                    $deferred->reject(new Exception('Timed out.'));
+                    $deferred->reject(new BufferTimedOutException());
                 });
 
                 $deferred->promise()->then(function () use ($timer) {
                     $this->loop->cancelTimer($timer);
                 });
+            } elseif ($timeout == 0) {
+                $deferred->reject(new BufferTimedOutException());
             }
         }
 
@@ -147,7 +138,7 @@ class Buffer extends EventEmitter implements WritableStreamInterface
                 $unpacked = unpack($format, $d);
                 
                 if ($unpacked === false) {
-                    throw new RuntimeException('Error unpacking buffer.');
+                    throw new \RuntimeException('Error unpacking buffer.');
                 }
                 
                 return reset($unpacked);
@@ -162,11 +153,11 @@ class Buffer extends EventEmitter implements WritableStreamInterface
      *
      * @param int $timeout Time in milliseconds before the read times out.
      *
-     * @return ExtendedPromiseInterface<int, RuntimeException>
+     * @return PromiseInterface<int, \RuntimeException>
      *
-     * @throws RuntimeException When there is an error unpacking the read bytes.
+     * @throws \RuntimeException When there is an error unpacking the read bytes.
      */
-    public function readInt32(int $timeout = -1): ExtendedPromiseInterface
+    public function readInt32(int $timeout = -1): PromiseInterface
     {
         return $this->read(4, 'l', $timeout);
     }
@@ -176,17 +167,17 @@ class Buffer extends EventEmitter implements WritableStreamInterface
      *
      * @param int $timeout Time in milliseconds before the read times out.
      *
-     * @return ExtendedPromiseInterface<int, RuntimeException>
+     * @return PromiseInterface<int, \RuntimeException>
      *
-     * @throws RuntimeException When there is an error unpacking the read bytes.
+     * @throws \RuntimeException When there is an error unpacking the read bytes.
      */
-    public function readInt16(int $timeout = -1): ExtendedPromiseInterface
+    public function readInt16(int $timeout = -1): PromiseInterface
     {
         return $this->read(2, 'v', $timeout);
     }
 
     /**
-     * @inheritdoc
+     * {@inheritDoc}
      */
     public function isWritable()
     {
@@ -194,7 +185,7 @@ class Buffer extends EventEmitter implements WritableStreamInterface
     }
 
     /**
-     * @inheritdoc
+     * {@inheritDoc}
      */
     public function end($data = null): void
     {
@@ -203,7 +194,7 @@ class Buffer extends EventEmitter implements WritableStreamInterface
     }
 
     /**
-     * @inheritdoc
+     * {@inheritDoc}
      */
     public function close(): void
     {
@@ -213,7 +204,6 @@ class Buffer extends EventEmitter implements WritableStreamInterface
 
         $this->buffer = [];
         $this->closed = true;
-        $this->readPointer = 0;
         $this->emit('close');
     }
 }

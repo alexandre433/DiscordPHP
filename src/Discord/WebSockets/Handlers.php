@@ -13,6 +13,8 @@ namespace Discord\WebSockets;
 
 /**
  * This class contains all the handlers for the individual WebSocket events.
+ *
+ * @since 2.1.3
  */
 class Handlers
 {
@@ -45,6 +47,8 @@ class Handlers
         $this->addHandler(Event::INTEGRATION_UPDATE, \Discord\WebSockets\Events\IntegrationUpdate::class);
         $this->addHandler(Event::INTEGRATION_DELETE, \Discord\WebSockets\Events\IntegrationDelete::class);
         $this->addHandler(Event::WEBHOOKS_UPDATE, \Discord\WebSockets\Events\WebhooksUpdate::class);
+        $this->addHandler(Event::APPLICATION_COMMAND_PERMISSIONS_UPDATE, \Discord\WebSockets\Events\ApplicationCommandPermissionsUpdate::class);
+        $this->addHandler(Event::GUILD_AUDIT_LOG_ENTRY_CREATE, \Discord\WebSockets\Events\GuildAuditLogEntryCreate::class);
 
         // Invite handlers
         $this->addHandler(Event::INVITE_CREATE, \Discord\WebSockets\Events\InviteCreate::class);
@@ -75,6 +79,8 @@ class Handlers
         $this->addHandler(Event::MESSAGE_REACTION_REMOVE, \Discord\WebSockets\Events\MessageReactionRemove::class);
         $this->addHandler(Event::MESSAGE_REACTION_REMOVE_ALL, \Discord\WebSockets\Events\MessageReactionRemoveAll::class);
         $this->addHandler(Event::MESSAGE_REACTION_REMOVE_EMOJI, \Discord\WebSockets\Events\MessageReactionRemoveEmoji::class);
+        $this->addHandler(Event::MESSAGE_POLL_VOTE_ADD, \Discord\WebSockets\Events\MessagePollVoteAdd::class);
+        $this->addHandler(Event::MESSAGE_POLL_VOTE_REMOVE, \Discord\WebSockets\Events\MessagePollVoteRemove::class);
 
         // New Member Event handlers
         $this->addHandler(Event::GUILD_MEMBER_ADD, \Discord\WebSockets\Events\GuildMemberAdd::class);
@@ -105,6 +111,18 @@ class Handlers
         $this->addHandler(Event::STAGE_INSTANCE_CREATE, \Discord\WebSockets\Events\StageInstanceCreate::class);
         $this->addHandler(Event::STAGE_INSTANCE_UPDATE, \Discord\WebSockets\Events\StageInstanceUpdate::class);
         $this->addHandler(Event::STAGE_INSTANCE_DELETE, \Discord\WebSockets\Events\StageInstanceDelete::class);
+
+        // Auto Moderation Event Handlers
+        $this->addHandler(Event::AUTO_MODERATION_RULE_CREATE, \Discord\WebSockets\Events\AutoModerationRuleCreate::class);
+        $this->addHandler(Event::AUTO_MODERATION_RULE_UPDATE, \Discord\WebSockets\Events\AutoModerationRuleUpdate::class);
+        $this->addHandler(Event::AUTO_MODERATION_RULE_DELETE, \Discord\WebSockets\Events\AutoModerationRuleDelete::class);
+        $this->addHandler(Event::AUTO_MODERATION_ACTION_EXECUTION, \Discord\WebSockets\Events\AutoModerationActionExecution::class);
+
+        // Soundboard Event Handlers
+        $this->addHandler(Event::GUILD_SOUNDBOARD_SOUND_CREATE, \Discord\WebSockets\Events\GuildSoundboardSoundCreate::class);
+        $this->addHandler(Event::GUILD_SOUNDBOARD_SOUND_UPDATE, \Discord\WebSockets\Events\GuildSoundboardSoundUpdate::class);
+        $this->addHandler(Event::GUILD_SOUNDBOARD_SOUND_DELETE, \Discord\WebSockets\Events\GuildSoundboardSoundDelete::class);
+        $this->addHandler(Event::SOUNDBOARD_SOUNDS, \Discord\WebSockets\Events\SoundboardSounds::class);
     }
 
     /**

@@ -20,34 +20,59 @@ use React\Promise\PromiseInterface;
 use function Discord\poly_strlen;
 
 /**
- * Select menus are another interactive component that renders on messages.
- * On desktop, clicking on a select menu opens a dropdown-style UI
+ * Select menus are interactive components that allow users to select one or
+ * more options from a dropdown list in messages.
+ * On desktop, clicking on a select menu opens a dropdown-style UI.
  * On mobile, tapping a select menu opens up a half-sheet with the options.
  *
- * @see https://discord.com/developers/docs/interactions/message-components#select-menus
+ * @link https://discord.com/developers/docs/interactions/message-components#select-menus
+ *
+ * @since 10.0.0 Renamed from SelectMenu to StringSelect and made SelectMenu abstract
  */
-class SelectMenu extends Component
+abstract class SelectMenu extends Component
 {
+    /**
+     * Type of select menu component (text: 3, user: 5, role: 6, mentionable: 7, channels: 8)
+     *
+     * @var integer
+     */
+    protected $type;
+
     /**
      * Custom ID to identify the select menu.
      *
      * @var string
      */
-    private $custom_id;
+    protected $custom_id;
 
     /**
-     * Array of options that the select menu has.
+     * Specified choices in a select menu (only required and available for string selects (type 3); max 25
      *
-     * @var Option[]
+     * @var array|null
      */
-    private $options = [];
+    protected $options;
+
+    /**
+     * List of channel types to include in the channel select component (type 8)
+     *
+     * @var array|null
+     */
+    protected $channel_types;
 
     /**
      * Placeholder string to display if nothing is selected. Maximum 150 characters.
      *
      * @var string|null
      */
-    private $placeholder;
+    protected $placeholder;
+
+    /**
+     * List of default values for auto-populated select menu components;
+     * number of default values must be in the range defined by min_values and max_values
+     *
+     * @var array|null
+     */
+    protected $default_values;
 
     /**
      * Minimum number of options that must be selected.
@@ -55,7 +80,7 @@ class SelectMenu extends Component
      *
      * @var int|null
      */
-    private $min_values;
+    protected $min_values;
 
     /**
      * Maximum number of options that must be selected.
@@ -63,33 +88,33 @@ class SelectMenu extends Component
      *
      * @var int|null
      */
-    private $max_values;
+    protected $max_values;
 
     /**
      * Whether the select menu should be disabled.
      *
      * @var bool|null
      */
-    private $disabled;
+    protected $disabled;
 
     /**
      * Callback used to listen for `INTERACTION_CREATE` events.
      *
      * @var callable|null
      */
-    private $listener;
+    protected $listener;
 
     /**
      * Discord instance when the listener is set.
      *
      * @var Discord|null
      */
-    private $discord;
+    protected $discord;
 
     /**
      * Creates a new select menu.
      *
-     * @param string|null $custom_id The custom ID of the select menu. If not given, an UUID will be used
+     * @param string|null $custom_id The custom ID of the select menu. If not given, a UUID will be used
      */
     public function __construct(?string $custom_id)
     {
@@ -101,11 +126,33 @@ class SelectMenu extends Component
      *
      * @param string|null $custom_id The custom ID of the select menu.
      *
-     * @return self
+     * @return static
      */
     public static function new(?string $custom_id = null): self
     {
-        return new self($custom_id);
+        return new static($custom_id);
+    }
+
+    /**
+     * Sets the type for the select menu.
+     * (text: 3, user: 5, role: 6, mentionable: 7, channels: 8)
+     *
+     * @param int $type
+     *
+     * @throws \InvalidArgumentException
+     *
+     * @return string
+     */
+    public function setType(int $type): self
+    {
+        $allowed_types = [self::TYPE_STRING_SELECT, self::TYPE_USER_SELECT, self::TYPE_ROLE_SELECT, self::TYPE_MENTIONABLE_SELECT, self::TYPE_CHANNEL_SELECT];
+        if (! in_array($type, $allowed_types)) {
+            throw new \InvalidArgumentException('Invalid select menu type.');
+        }
+
+        $this->type = $type;
+
+        return $this;
     }
 
     /**
@@ -113,7 +160,7 @@ class SelectMenu extends Component
      *
      * @param string $custom_id
      *
-     * @throws \LengthException
+     * @throws \LengthException If the custom ID is longer than 100 characters.
      *
      * @return $this
      */
@@ -122,63 +169,59 @@ class SelectMenu extends Component
         if (poly_strlen($custom_id) > 100) {
             throw new \LengthException('Custom ID must be maximum 100 characters.');
         }
-        
+
         $this->custom_id = $custom_id;
 
         return $this;
     }
 
     /**
-     * Adds an option to the select menu. Maximum 25 options.
+     * Specified choices in a select menu (only required and available for string selects (type 3); max 25
      *
-     * @param Option $option Option to add.
+     * @param array $options
      *
-     * @throws \OverflowException
-     * @throws \UnexpectedValueException
+     * @throws \InvalidArgumentException If the select menu type is not `TYPE_STRING_SELECT`.
      *
      * @return $this
      */
-    public function addOption(Option $option): self
+    public function setOptions(array $options): self
     {
-        if (count($this->options) > 25) {
-            throw new \OverflowException('You can only have 25 options per select menu.');
+        if ($this->type != self::TYPE_STRING_SELECT) {
+            throw new \InvalidArgumentException('Options can only be set for string selects.');
         }
 
-        $value = $option->getValue();
-
-        // didn't wanna use a hashtable here so that we can keep the order of options
-        foreach ($this->options as $other) {
-            if ($other->getValue() == $value) {
-                throw new \UnexpectedValueException('Another value already has the same value. These must not be the same.');
-            }
-        }
-
-        $this->options[] = $option;
+        $this->options = $options;
 
         return $this;
     }
 
     /**
-     * Removes an option from the select menu.
+     * Sets the channel types for the select menu.
      *
-     * @param Option $option Option to remove.
+     * This method is only applicable if the select menu type is `TYPE_CHANNEL_SELECT`.
+     * If the select menu type is not `TYPE_CHANNEL_SELECT`, an `InvalidArgumentException` will be thrown.
+     *
+     * @param array $channel_types
+     *
+     * @throws \InvalidArgumentException If the select menu type is not `TYPE_CHANNEL_SELECT`.
      *
      * @return $this
      */
-    public function removeOption(Option $option): self
+    public function setChannelTypes(array $channel_types): self
     {
-        if (($idx = array_search($option, $this->options)) !== null) {
-            array_splice($this->options, $idx, 1);
+        if ($this->type != self::TYPE_CHANNEL_SELECT) {
+            throw new \InvalidArgumentException('Channel types can only be set for channel selects.');
         }
+
+        $this->channel_types = $channel_types;
 
         return $this;
     }
 
     /**
      * Sets the placeholder string to display if nothing is selected.
-     * Maximum 150 characters. Null to clear placeholder.
      *
-     * @param string|null $placeholder
+     * @param string|null $placeholder Maximum 150 characters. `null` to clear placeholder.
      *
      * @throws \LengthException
      *
@@ -195,11 +238,21 @@ class SelectMenu extends Component
         return $this;
     }
 
+    public function setDefaultValues(?array $default_values): self
+    {
+        $allowed_types = [self::TYPE_USER_SELECT, self::TYPE_ROLE_SELECT, self::TYPE_MENTIONABLE_SELECT, self::TYPE_CHANNEL_SELECT];
+        if (! in_array($this->type, $allowed_types)) {
+            throw new \InvalidArgumentException('Default values can only be set for user, role, mentionable, and channel selects.');
+        }
+        $this->default_values = $default_values;
+
+        return $this;
+    }
+
     /**
      * Sets the minimum number of options which must be chosen.
-     * Default 1, minimum 0 and maximum 25. Null to set as default.
      *
-     * @param int|null $min_values
+     * @param int|null $min_values Default `1`, minimum `0` and maximum `25`. `null` to set as default.
      *
      * @throws \LengthException
      *
@@ -218,9 +271,8 @@ class SelectMenu extends Component
 
     /**
      * Sets the maximum number of options which must be chosen.
-     * Default 1 and maximum 25. Null to set as default.
      *
-     * @param int|null $max_values
+     * @param int|null $max_values Default `1` and maximum `25`. `null` to set as default.
      *
      * @throws \LengthException
      *
@@ -252,19 +304,23 @@ class SelectMenu extends Component
     }
 
     /**
-     * Sets the callable listener for the select menu. The `$callback` function will be called when
-     * the selection of the menu is changed.
+     * Sets the callable listener for the select menu. The `$callback` function
+     * will be called when the selection of the menu is changed.
      *
-     * The callback function is called with the `Interaction` object as well as a `Collection` of
-     * selected options.
+     * The callback function is called with the `Interaction` object as well as
+     * a `Collection` of selected options.
      *
-     * If you do not respond to or acknowledge the `Interaction`, it will be acknowledged for you.
-     * Note that if you intend to respond to or acknowledge the interaction inside a promise, you should
-     * return a promise that resolves *after* you respond or acknowledge.
+     * If you do not respond to or acknowledge the `Interaction`, it will be
+     * acknowledged for you.
+     * Note that if you intend to respond to or acknowledge the interaction
+     * inside a promise, you should return a promise that resolves *after* you
+     * respond or acknowledge.
      *
-     * The callback will only be called once with the `$oneOff` parameter set to true.
-     * This can be changed to false, and the callback will be called each time the selection is changed.
-     * To remove the listener, you can pass `$callback` as null.
+     * The callback will only be called once with the `$oneOff` parameter set to
+     * true.
+     * This can be changed to false, and the callback will be called each time
+     * the selection is changed. To remove the listener, you can pass
+     * `$callback` as null.
      *
      * The select menu listener will not persist when the bot restarts.
      *
@@ -273,6 +329,8 @@ class SelectMenu extends Component
      * @param bool     $oneOff   Whether the listener should be removed after the selection is changed for the first time.
      *
      * @return $this
+     *
+     * @todo setListener callback return for each type.
      */
     public function setListener(?callable $callback, Discord $discord, bool $oneOff = false): self
     {
@@ -287,24 +345,22 @@ class SelectMenu extends Component
         }
 
         $this->listener = function (Interaction $interaction) use ($callback, $oneOff) {
-            if ($interaction->data->component_type == Component::TYPE_SELECT_MENU &&
+            if ($interaction->data->component_type == $this->type &&
                 $interaction->data->custom_id == $this->custom_id) {
-                $options = Collection::for(Option::class, null);
-                
-                foreach ($this->options as $option) {
-                    if (in_array($option->getValue(), $interaction->data->values)) {
-                        $options->push($option);
-                    }
-                }
+                if (empty($this->options)) {
+                    $response = $callback($interaction);
+                } else {
+                    $options = Collection::for(Option::class, null);
 
-                $response = $callback($interaction, $options);
-                $ack = function () use ($interaction) {
-                    // attempt to acknowledge interaction if it has not already been responded to.
-                    try {
-                        $interaction->acknowledge();
-                    } catch (\Exception $e) {
+                    foreach ($this->options as $option) {
+                        if (in_array($option->getValue(), $interaction->data->values)) {
+                            $options->pushItem($option);
+                        }
                     }
-                };
+
+                    $response = $callback($interaction, $options);
+                }
+                $ack = static fn() => $interaction->isResponded() ?: $interaction->acknowledge();
 
                 if ($response instanceof PromiseInterface) {
                     $response->then($ack);
@@ -334,6 +390,16 @@ class SelectMenu extends Component
     }
 
     /**
+     * Returns the type of the select menu.
+     *
+     * @return int
+     */
+    public function getType(): int
+    {
+        return $this->type;
+    }
+
+    /**
      * Returns the Custom ID of the select menu.
      *
      * @return string
@@ -344,13 +410,23 @@ class SelectMenu extends Component
     }
 
     /**
-     * Returns the array of options that the select menu has.
+     * Returns the options of the select menu.
      *
-     * @return array
+     * @return array|null
      */
-    public function getOptions(): array
+    public function getOptions(): ?array
     {
         return $this->options;
+    }
+
+    /**
+     * Returns the channel types of the select menu.
+     *
+     * @return array|null
+     */
+    public function getChannelTypes(): ?array
+    {
+        return $this->channel_types;
     }
 
     /**
@@ -361,6 +437,16 @@ class SelectMenu extends Component
     public function getPlaceholder(): ?string
     {
         return $this->placeholder;
+    }
+
+    /**
+     * Returns the default values of the select menu.
+     *
+     * @return array|null
+     */
+    public function getDefaultValues(): ?array
+    {
+        return $this->default_values;
     }
 
     /**
@@ -384,7 +470,7 @@ class SelectMenu extends Component
     }
 
     /**
-     * Returns wether the select menu is disabled.
+     * Returns whether the select menu is disabled.
      *
      * @return bool|null
      */
@@ -394,22 +480,29 @@ class SelectMenu extends Component
     }
 
     /**
-     * @inheritDoc
+     * {@inheritDoc}
      */
     public function jsonSerialize(): array
     {
         $content = [
-            'type' => Component::TYPE_SELECT_MENU,
+            'type' => $this->type,
             'custom_id' => $this->custom_id,
-            'options' => $this->options,
         ];
+
+        if (isset($this->options)) {
+            $content['options'] = $this->options;
+        }
+
+        if (isset($this->channel_types)) {
+            $content['channel_types'] = $this->channel_types;
+        }
 
         if (isset($this->placeholder)) {
             $content['placeholder'] = $this->placeholder;
         }
 
         if (isset($this->min_values)) {
-            if ($this->min_values > count($this->options)) {
+            if (isset($this->options) && $this->min_values > count($this->options)) {
                 throw new \OutOfBoundsException('There are less options than the minimum number of options to be selected.');
             }
 
@@ -417,7 +510,7 @@ class SelectMenu extends Component
         }
 
         if ($this->max_values) {
-            if ($this->max_values > count($this->options)) {
+            if (isset($this->options) && $this->max_values > count($this->options)) {
                 throw new \OutOfBoundsException('There are less options than the maximum number of options to be selected.');
             }
 

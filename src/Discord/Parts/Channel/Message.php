@@ -1304,9 +1304,20 @@ class Message extends Part
      */
     public function createReactionCollector(callable $filter, array $options = []): PromiseInterface
     {
-        $deferred = new Deferred();
-        $reactions = new ($this->discord->getCollectionClass())([], null, null);
+        $eventHandler = null;
         $timer = null;
+
+        $deferred = new Deferred(function () use (&$eventHandler, &$timer) {
+            $this->discord->removeListener(Event::MESSAGE_REACTION_ADD, $eventHandler);
+            $eventHandler = null;
+
+            if (null !== $timer) {
+                $this->discord->getLoop()->cancelTimer($timer);
+                $timer = null;
+            }
+        });
+
+        $reactions = new ($this->discord->getCollectionClass())([], null, null);
 
         $options = array_merge([
             'time' => false,
@@ -1326,9 +1337,11 @@ class Message extends Part
                 if ($options['limit'] !== false && count($reactions) >= $options['limit']) {
                     $this->discord->removeListener(Event::MESSAGE_REACTION_ADD, $eventHandler);
                     $deferred->resolve($reactions);
+                    $eventHandler = null;
 
                     if (null !== $timer) {
                         $this->discord->getLoop()->cancelTimer($timer);
+                        $timer = null;
                     }
                 }
             }
@@ -1337,9 +1350,11 @@ class Message extends Part
         $this->discord->on(Event::MESSAGE_REACTION_ADD, $eventHandler);
 
         if ($options['time'] !== false) {
-            $timer = $this->discord->getLoop()->addTimer($options['time'] / 1000, function () use (&$eventHandler, &$reactions, &$deferred) {
+            $timer = $this->discord->getLoop()->addTimer($options['time'] / 1000, function () use (&$eventHandler, &$reactions, &$deferred, &$timer) {
                 $this->discord->removeListener(Event::MESSAGE_REACTION_ADD, $eventHandler);
                 $deferred->resolve($reactions);
+                $eventHandler = null;
+                $timer = null;
             });
         }
 

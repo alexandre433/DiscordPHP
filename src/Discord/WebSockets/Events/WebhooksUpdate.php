@@ -15,7 +15,6 @@ declare(strict_types=1);
 namespace Discord\WebSockets\Events;
 
 use Discord\Parts\Channel\Channel;
-use Discord\Parts\Thread\Thread;
 use Discord\WebSockets\Event;
 
 /**
@@ -33,14 +32,8 @@ class WebhooksUpdate extends Event
         if ($guild = yield $this->discord->guilds->cacheGet($data->guild_id)) {
             /** @var ?Channel */
             if (! $channel = yield $guild->channels->cacheGet($data->channel_id)) {
-                /** @var Channel */
-                foreach ($guild->channels as $parent) {
-                    /** @var ?Thread */
-                    if ($thread = yield $parent->threads->cacheGet($data->channel_id)) {
-                        $channel = $thread;
-                        break;
-                    }
-                }
+                /** @var ?Thread */
+                $channel = yield from $guild->getThread($data->channel_id);
             }
 
             return [$guild, $channel ?? (object) ['id' => $data->channel_id]];

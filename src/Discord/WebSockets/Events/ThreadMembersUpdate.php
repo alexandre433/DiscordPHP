@@ -14,7 +14,6 @@ declare(strict_types=1);
 
 namespace Discord\WebSockets\Events;
 
-use Discord\Parts\Channel\Channel;
 use Discord\Parts\Guild\Guild;
 use Discord\Parts\Thread\Thread;
 use Discord\WebSockets\Event;
@@ -37,27 +36,24 @@ class ThreadMembersUpdate extends Event
         // comes before the `THREAD_CREATE` event, so we just don't emit this event if we don't have the
         // thread cached.
         /** @todo channels may be missing from cache */
-        /** @var Channel */
-        foreach ($guild->channels as $channel) {
-            /** @var ?Thread */
-            if ($thread = yield $channel->threads->cacheGet($data->id)) {
-                $thread->member_count = $data->member_count;
+        /** @var ?Thread */
+        if ($thread = yield from $guild->getThread($data->id)) {
+            $thread->member_count = $data->member_count;
 
-                if (isset($data->removed_member_ids)) {
-                    yield $thread->members->cache->deleteMultiple($data->removed_member_ids);
-                }
-
-                foreach ($data->added_members ?? [] as $member) {
-                    $thread->members->set($member->user_id, $thread->members->create((array) $member + ['guild_id' => $data->guild_id], true));
-
-                    if (isset($member->member)) {
-                        $this->cacheMember($guild->members, (array) $member->member);
-                        $this->cacheUser($member->member->user);
-                    }
-                }
-
-                return $thread;
+            if (isset($data->removed_member_ids)) {
+                yield $thread->members->cache->deleteMultiple($data->removed_member_ids);
             }
+
+            foreach ($data->added_members ?? [] as $member) {
+                $thread->members->set($member->user_id, $thread->members->create((array) $member + ['guild_id' => $data->guild_id], true));
+
+                if (isset($member->member)) {
+                    $this->cacheMember($guild->members, (array) $member->member);
+                    $this->cacheUser($member->member->user);
+                }
+            }
+
+            return $thread;
         }
 
         return null;

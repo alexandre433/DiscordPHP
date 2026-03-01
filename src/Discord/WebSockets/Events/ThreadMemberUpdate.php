@@ -14,7 +14,6 @@ declare(strict_types=1);
 
 namespace Discord\WebSockets\Events;
 
-use Discord\Parts\Channel\Channel;
 use Discord\Parts\Guild\Guild;
 use Discord\Parts\Thread\Member;
 use Discord\Parts\Thread\Thread;
@@ -34,13 +33,9 @@ class ThreadMemberUpdate extends Event
 
         /** @var ?Guild */
         if ($guild = yield $this->discord->guilds->cacheGet($data->guild_id)) {
-            /** @var Channel */
-            foreach ($guild->channels as $channel) {
-                /** @var ?Thread */
-                if ($thread = yield $channel->threads->cacheGet($data->id)) {
-                    $thread->members->set($data->user_id, $memberPart);
-                    break;
-                }
+            /** @var ?Thread */
+            if ($thread = yield from $guild->getThread($data->id)) {
+                $thread->members->set($data->user_id, $memberPart);
             }
         }
 

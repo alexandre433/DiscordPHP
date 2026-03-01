@@ -47,6 +47,7 @@ use Discord\Repository\Guild\ScheduledEventRepository;
 use Discord\Repository\Guild\GuildTemplateRepository;
 use Discord\Repository\Guild\IntegrationRepository;
 use Discord\Repository\Guild\MessageRepository;
+use Discord\Parts\Thread\Thread;
 use Discord\Repository\GuildRepository;
 use Discord\Repository\VoiceStateRepository;
 use Discord\Voice\Region;
@@ -379,6 +380,29 @@ class Guild extends Part
     public function createChannel($channel, ?string $reason = null): PromiseInterface
     {
         return $this->channels->createChannel($this->id, $channel, $reason);
+    }
+
+    /**
+     * Finds a cached thread by ID across all channels in the guild.
+     *
+     * Because threads are stored under their parent channel, there is no
+     * direct guild-level thread cache. This generator iterates over all
+     * cached channels and performs an async cache lookup for each one,
+     * stopping as soon as the thread is found.
+     *
+     * @param string|int $threadId The ID of the thread to find.
+     *
+     * @return \Generator<mixed, mixed, mixed, Thread|null>
+     */
+    public function getThread(string|int $threadId): \Generator
+    {
+        foreach ($this->channels as $channel) {
+            if ($thread = yield $channel->threads->cacheGet($threadId)) {
+                return $thread;
+            }
+        }
+
+        return null;
     }
 
     /**

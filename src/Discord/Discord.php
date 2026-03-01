@@ -1,9 +1,12 @@
 <?php
 
+declare(strict_types=1);
+
 /*
  * This file is a part of the DiscordPHP project.
  *
- * Copyright (c) 2015-present David Cole <david.cole1340@gmail.com>
+ * Copyright (c) 2015-2022 David Cole <david.cole1340@gmail.com>
+ * Copyright (c) 2020-present Valithor Obsidion <valithor@discordphp.org>
  *
  * This file is subject to the MIT license that is bundled
  * with this source code in the LICENSE.md file.
@@ -15,11 +18,15 @@ use Discord\Exceptions\IntentException;
 use Discord\Factory\Factory;
 use Discord\Helpers\BigInt;
 use Discord\Helpers\CacheConfig;
+use Discord\Helpers\Collection;
+use Discord\Helpers\ExCollectionInterface;
 use Discord\Helpers\RegisteredCommand;
 use Discord\Http\Drivers\React;
 use Discord\Http\Endpoint;
 use Discord\Http\Http;
 use Discord\Parts\Channel\Channel;
+use Discord\Parts\Gateway\GetGatewayBot;
+use Discord\Parts\Gateway\SessionStartLimit;
 use Discord\Parts\Guild\Guild;
 use Discord\Parts\OAuth\Application;
 use Discord\Parts\Part;
@@ -27,20 +34,29 @@ use Discord\Parts\User\Activity;
 use Discord\Parts\User\Client;
 use Discord\Parts\User\Member;
 use Discord\Parts\User\User;
+use Discord\Parts\WebSockets\VoiceServerUpdate;
+use Discord\Parts\WebSockets\VoiceStateUpdate;
 use Discord\Repository\AbstractRepository;
 use Discord\Repository\EmojiRepository;
 use Discord\Repository\GuildRepository;
+use Discord\Repository\LobbyRepository;
 use Discord\Repository\PrivateChannelRepository;
+use Discord\Repository\SoundRepository;
 use Discord\Repository\UserRepository;
+use Discord\Voice\Manager;
+use Discord\Voice\Region;
 use Discord\Voice\VoiceClient;
 use Discord\WebSockets\Event;
+use Discord\WebSockets\Events\Data\GuildMembersChunkData;
 use Discord\WebSockets\Events\GuildCreate;
+use Discord\WebSockets\Payload;
 use Discord\WebSockets\Handlers;
 use Discord\WebSockets\Intents;
 use Discord\WebSockets\Op;
 use Evenement\EventEmitterTrait;
 use Monolog\Formatter\LineFormatter;
 use Monolog\Handler\StreamHandler;
+use Monolog\Level;
 use Monolog\Logger as Monolog;
 use Psr\Log\LoggerInterface;
 use Ratchet\Client\Connector;
@@ -56,29 +72,32 @@ use Symfony\Component\OptionsResolver\OptionsResolver;
 
 use function React\Async\coroutine;
 use function React\Promise\all;
+use function React\Promise\reject;
+use function React\Promise\resolve;
 
 /**
  * The Discord client class.
  *
  * @version 10.0.0
  *
- * @property string                     $id               The unique identifier of the client.
- * @property string                     $username         The username of the client.
- * @property string                     $password         The password of the client (if they have provided it).
- * @property string                     $email            The email of the client.
- * @property bool                       $verified         Whether the client has verified their email.
- * @property string                     $avatar           The avatar URL of the client.
- * @property string                     $avatar_hash      The avatar hash of the client.
- * @property string                     $discriminator    The unique discriminator of the client.
- * @property bool                       $bot              Whether the client is a bot.
- * @property User                       $user             The user instance of the client.
- * @property Application                $application      The OAuth2 application of the bot.
- * @property EmojiRepository            $emojis
- * @property GuildRepository            $guilds
- * @property PrivateChannelRepository   $private_channels
- * @property SoundRepository            $sounds
- * @property UserRepository             $users
-
+ * @property string      $id            The unique identifier of the client.
+ * @property string      $username      The username of the client.
+ * @property string      $password      The password of the client (if they have provided it).
+ * @property string      $email         The email of the client.
+ * @property bool        $verified      Whether the client has verified their email.
+ * @property string      $avatar        The avatar URL of the client.
+ * @property string      $avatar_hash   The avatar hash of the client.
+ * @property string      $discriminator The unique discriminator of the client.
+ * @property bool        $bot           Whether the client is a bot.
+ * @property User        $user          The user instance of the client.
+ * @property Application $application   The OAuth2 application of the bot.
+ *
+ * @property EmojiRepository          $emojis
+ * @property GuildRepository          $guilds
+ * @property LobbyRepository          $lobbies
+ * @property PrivateChannelRepository $private_channels
+ * @property SoundRepository          $sounds
+ * @property UserRepository           $users
  */
 class Discord
 {
@@ -96,7 +115,9 @@ class Discord
      *
      * @var string Version.
      */
-    public const VERSION = 'v10.0.0';
+    public const VERSION = 'v10.46.0';
+
+    public const REFERRER = 'https://github.com/discord-php/DiscordPHP';
 
     /**
      * The logger.
@@ -190,11 +211,11 @@ class Discord
     protected $sessionId;
 
     /**
-     * An array of voice clients that are currently connected.
+     * An array of guild IDs paired to their voice session IDs.
      *
-     * @var array Voice Clients.
+     * @var string[] Voice Sessions.
      */
-    protected $voiceClients = [];
+    public array $voice_sessions = [];
 
     /**
      * An array of large guilds that need to be requested for members.
@@ -326,9 +347,16 @@ class Discord
     /**
      * The cache configuration.
      *
-     * @var CacheConfig[]
+     * @var CacheConfig[] Cache configuration.
      */
     protected $cacheConfig;
+
+    /**
+     * The collection class implementing ExCollectionInterface.
+     *
+     * @var string Collection class.
+     */
+    protected $collectionClass;
 
     /**
      * The Client class.
@@ -342,23 +370,48 @@ class Discord
      *
      * @var RegisteredCommand[]
      */
-    private $application_commands;
+    protected $application_commands;
+
+    /**
+     * The voice handler, of clients and packets.
+     *
+     * @var Manager|null
+     */
+    public ?Manager $voice = null;
+
+    /**
+     * The transport compression setting.
+     *
+     * @var bool Whether to use transport compression.
+     */
+    protected $useTransportCompression;
+
+    /**
+     * The payload compression setting.
+     *
+     * @var bool Whether to use payload compression.
+     */
+    protected $usePayloadCompression;
+
+    /**
+     * An array of valid regions.
+     *
+     * @var ExCollectionInterface<Region>|null
+     */
+    protected $regions;
 
     /**
      * Creates a Discord client instance.
      *
-     * @param  array           $options Array of options.
+     * @param  array             $options Array of options.
      * @throws IntentException
+     * @throws \RuntimeException
      */
     public function __construct(array $options = [])
     {
-        if (php_sapi_name() !== 'cli') {
-            trigger_error('DiscordPHP will not run on a webserver. Please use PHP CLI to run a DiscordPHP bot.', E_USER_ERROR);
-        }
-
         // x86 need gmp extension for big integer operation
         if (PHP_INT_SIZE === 4 && ! BigInt::init()) {
-            trigger_error('ext-gmp is not loaded, it is required for 32-bits (x86) PHP.', E_USER_ERROR);
+            throw new \RuntimeException('ext-gmp is not loaded, it is required for 32-bits (x86) PHP.');
         }
 
         $options = $this->resolveOptions($options);
@@ -368,6 +421,10 @@ class Discord
         $this->loop = $options['loop'];
         $this->logger = $options['logger'];
 
+        if (! in_array(php_sapi_name(), ['cli', 'micro'])) {
+            $this->logger->critical('DiscordPHP will not run on a webserver. Please use PHP CLI to run a DiscordPHP bot.');
+        }
+
         $this->logger->debug('Initializing DiscordPHP '.self::VERSION.' (DiscordPHP-Http: '.Http::VERSION.' & Gateway: v'.self::GATEWAY_VERSION.') on PHP '.PHP_VERSION);
 
         $this->cacheConfig = $options['cache'];
@@ -375,9 +432,29 @@ class Discord
             $this->logger->warning('Attached experimental CacheInterface: '.get_class($cacheConfig->interface));
         }
 
+        $this->collectionClass = $options['collection'];
+        if ($this->collectionClass !== Collection::class) {
+            $this->logger->warning('Attached experimental Collection: '.$this->collectionClass);
+        }
+
         $connector = new SocketConnector($options['socket_options'], $this->loop);
         $this->wsFactory = new Connector($this->loop, $connector);
         $this->handlers = new Handlers();
+
+        static $important_events = [
+            Event::GUILD_CREATE,
+            Event::GUILD_DELETE,
+            Event::RESUMED,
+            Event::READY,
+            Event::GUILD_MEMBERS_CHUNK,
+            // These are critical for voice functionality such as connecting to voice channels and seeing what members are in a voice channel
+            Event::VOICE_STATE_UPDATE => 'handleVoiceStateUpdate',
+            Event::VOICE_SERVER_UPDATE => 'handleVoiceServerUpdate',
+        ];
+
+        if ($disabledImportant = array_values(array_intersect($important_events, $options['disabledEvents']))) {
+            $this->logger->warning('Critical events have been disabled, performance may be affected', ['events' => implode(', ', $disabledImportant)]);
+        }
 
         foreach ($options['disabledEvents'] as $event) {
             $this->handlers->removeHandler($event);
@@ -393,26 +470,28 @@ class Discord
         $this->factory = new Factory($this);
         $this->client = $this->factory->part(Client::class, []);
 
+        $this->useTransportCompression = $options['useTransportCompression'];
+        $this->usePayloadCompression = $options['usePayloadCompression'];
         $this->connectWs();
     }
 
     /**
      * Handles `VOICE_SERVER_UPDATE` packets.
      *
-     * @param object $data Packet data.
+     * @param Payload $data Packet data.
      */
     protected function handleVoiceServerUpdate(object $data): void
     {
-        if (isset($this->voiceClients[$data->d->guild_id])) {
+        if (isset($this->voice->clients[$data->d->guild_id])) {
             $this->logger->debug('voice server update received', ['guild' => $data->d->guild_id, 'data' => $data->d]);
-            $this->voiceClients[$data->d->guild_id]->handleVoiceServerChange((array) $data->d);
+            $this->voice->clients[$data->d->guild_id]->handleVoiceServerChange((array) $data->d);
         }
     }
 
     /**
      * Handles `RESUME` packets.
      *
-     * @param object $data Packet data.
+     * @param Payload $data Packet data.
      */
     protected function handleResume(object $data): void
     {
@@ -423,7 +502,7 @@ class Discord
     /**
      * Handles `READY` packets.
      *
-     * @param object $data Packet data.
+     * @param Payload $data Packet data.
      *
      * @return false|void
      * @throws \Exception
@@ -483,11 +562,6 @@ class Discord
             return $this->ready();
         }
 
-        // Emit ready after 60 seconds
-        $this->loop->addTimer(60, function () {
-            $this->ready();
-        });
-
         $guildLoad = new Deferred();
 
         $onGuildCreate = function ($guild) use (&$unavailable, $guildLoad) {
@@ -523,70 +597,109 @@ class Discord
 
             $this->setupChunking();
         });
+
+        if (in_array(Event::GUILD_CREATE, $this->options['disabledEvents'])) {
+            $this->ready();
+        } else {
+            // Emit ready after 60 seconds
+            $this->loop->addTimer(60, fn () => $this->ready());
+        }
     }
 
     /**
-     * Handles `GUILD_MEMBERS_CHUNK` packets.
+     * Sets guild member chunking up.
      *
-     * @param  object     $data Packet data.
-     * @throws \Exception
+     * @return false|void
      */
-    protected function handleGuildMembersChunk(object $data): void
+    protected function setupChunking()
     {
-        if (! $guild = $this->guilds->get('id', $data->d->guild_id)) {
-            $this->logger->warning('not chunking member, Guild is not cached.', ['guild_id' => $data->d->guild_id]);
+        if ($this->options['loadAllMembers'] === false) {
+            $this->logger->info('loadAllMembers option is disabled, not setting chunking up');
+
+            return $this->ready();
+        }
+
+        $this->loop->addPeriodicTimer(5, fn () => $this->checkForChunks);
+        $this->logger->info('set up chunking, checking for chunks every 5 seconds');
+        $this->checkForChunks();
+    }
+
+    /**
+     * Checks for any large guilds that need to be chunked.
+     */
+    protected function checkForChunks(): void
+    {
+        if ((count($this->largeGuilds) < 1) && (count($this->largeSent) < 1)) {
+            $this->ready();
 
             return;
         }
 
-        $this->logger->debug('received guild member chunk', ['guild_id' => $data->d->guild_id, 'guild_name' => $guild->name, 'chunk_count' => count($data->d->members), 'member_collection' => $guild->members->count(), 'member_count' => $guild->member_count, 'progress' => [$data->d->chunk_index + 1, $data->d->chunk_count]]);
+        if (count($this->largeGuilds) < 1) {
+            $this->logger->debug('unprocessed chunks', $this->largeSent);
 
-        $count = $skipped = 0;
-        $await = [];
-        foreach ($data->d->members as $member) {
-            $userId = $member->user->id;
-            if ($guild->members->offsetExists($userId)) {
-                continue;
-            }
-
-            $member = (array) $member;
-            $member['guild_id'] = $data->d->guild_id;
-            $member['status'] = 'offline';
-            $await[] = $guild->members->cache->set($userId, $this->factory->part(Member::class, $member, true));
-
-            if (! $this->users->offsetExists($userId)) {
-                $await[] = $this->users->cache->set($userId, $this->users->create($member['user'], true));
-            }
-
-            ++$count;
+            return;
         }
 
-        all($await)->then(function () use ($guild, $count, $skipped) {
-            $membersCount = $guild->members->count();
-            $this->logger->debug('parsed '.$count.' members (skipped '.$skipped.')', ['repository_count' => $membersCount, 'actual_count' => $guild->member_count]);
-
-            if ($membersCount >= $guild->member_count) {
-                $this->largeSent = array_diff($this->largeSent, [$guild->id]);
-
-                $this->logger->debug('all users have been loaded', ['guild' => $guild->id, 'member_collection' => $membersCount, 'member_count' => $guild->member_count]);
+        if (is_array($this->options['loadAllMembers'])) {
+            foreach ($this->largeGuilds as $key => $guild) {
+                if (! in_array($guild, $this->options['loadAllMembers'])) {
+                    $this->logger->debug('not fetching members for guild ID '.$guild);
+                    unset($this->largeGuilds[$key]);
+                }
             }
+        }
 
-            if (count($this->largeSent) < 1) {
-                $this->ready();
-            }
-        });
+        $chunks = array_chunk($this->largeGuilds, 50);
+        $this->logger->debug('sending '.count($chunks).' chunks with '.count($this->largeGuilds).' large guilds overall');
+        $this->largeSent = array_merge($this->largeGuilds, $this->largeSent);
+        $this->largeGuilds = [];
+
+        $this->sendChunks($chunks);
+    }
+
+    /**
+     * Sends chunks of guild member requests.
+     *
+     * @param array &$chunks
+     */
+    protected function sendChunks(array &$chunks = []): void
+    {
+        $chunk = array_pop($chunks);
+
+        if (null === $chunk) {
+            return;
+        }
+
+        $this->logger->debug('sending chunk with '.count($chunk).' large guilds');
+
+        foreach ($chunk as $guild_id) {
+            $this->requestGuildMembers(
+                $guild_id,
+                [
+                    'query' => '',
+                    'limit' => 0,
+                ]
+            );
+        }
+        $this->loop->addTimer(1, fn () => $this->sendChunks($chunks));
     }
 
     /**
      * Handles `VOICE_STATE_UPDATE` packets.
      *
-     * @param object $data Packet data.
+     * @param Payload $data Packet data.
      */
     protected function handleVoiceStateUpdate(object $data): void
     {
-        if (isset($this->voiceClients[$data->d->guild_id])) {
-            $this->logger->debug('voice state update received', ['guild' => $data->d->guild_id, 'data' => $data->d]);
-            $this->voiceClients[$data->d->guild_id]->handleVoiceStateUpdate($data->d);
+        /** @var VoiceStateUpdate */
+        $voiceStateUpdate = $this->factory->part(VoiceStateUpdate::class, (array) $data->d, true);
+
+        $this->logger->debug('voice state update received', ['guild' => $voiceStateUpdate->guild_id, 'data' => $voiceStateUpdate]);
+        if (isset($this->voice, $this->voice->clients[$voiceStateUpdate->guild_id])) {
+            /** @var VoiceClient */
+            $client = $this->voice->clients[$voiceStateUpdate->guild_id];
+            $client->handleVoiceStateUpdate($voiceStateUpdate);
         }
     }
 
@@ -627,11 +740,15 @@ class Discord
             if ($this->zlibDecompressor) {
                 $this->payloadBuffer .= $payload;
 
-                if ($message->getPayloadLength() < 4 || substr($payload, -4) != "\x00\x00\xff\xff") {
+                if ($message->getPayloadLength() < 4 || substr($payload, -4) !== "\x00\x00\xff\xff") {
                     return;
                 }
 
-                $this->processWsMessage(inflate_add($this->zlibDecompressor, $this->payloadBuffer));
+                if (($inflated = inflate_add($this->zlibDecompressor, $this->payloadBuffer)) !== false) {
+                    $this->processWsMessage($inflated);
+                } else {
+                    $this->logger->error('failed to inflate payload buffer', ['payload' => $payload, 'buffer' => $this->payloadBuffer, 'payload hex' => bin2hex($payload), 'buffer hex' => bin2hex($this->payloadBuffer)]);
+                }
                 $this->payloadBuffer = '';
             } else {
                 $this->processWsMessage(zlib_decode($payload));
@@ -648,15 +765,24 @@ class Discord
      */
     protected function processWsMessage(string $data): void
     {
-        $data = json_decode($data);
-        $this->emit('raw', [$data, $this]);
+        if (! $decoded = json_decode($data)) {
+            $this->logger->warning('failed to decode websocket message', ['payload' => $data]);
 
-        if (isset($data->s)) {
-            $this->seq = $data->s;
+            // @todo: handle invalid payload (reconnect), throw exception, or ignore?
+            return;
         }
 
-        $op = [
+        $this->emit('raw', [$decoded, $this]);
+
+        if (isset($decoded->s)) {
+            $this->seq = $decoded->s;
+        }
+
+        static $rawOp = [
             Op::OP_DISPATCH => 'handleDispatch',
+        ];
+
+        static $op = [
             Op::OP_HEARTBEAT => 'handleHeartbeat',
             Op::OP_RECONNECT => 'handleReconnect',
             Op::OP_INVALID_SESSION => 'handleInvalidSession',
@@ -664,9 +790,11 @@ class Discord
             Op::OP_HEARTBEAT_ACK => 'handleHeartbeatAck',
         ];
 
-        if (isset($data, $data->op, $op[$data->op])) {
-            $this->{$op[$data->op]}($data);
-        }
+        isset($rawOp[$decoded->op])
+            ? $this->{$rawOp[$decoded->op]}($decoded)
+            : (isset($op[$decoded->op])
+                ? $this->{$op[$decoded->op]}(Payload::new($decoded->op, $decoded->d, $decoded->s, $decoded->t))
+                : $this->logger->debug('unknown op code', ['op' => $decoded->op, 'payload' => $decoded]));
     }
 
     /**
@@ -755,16 +883,16 @@ class Discord
         $hData = $this->handlers->getHandler($data->t);
 
         if (null === $hData) {
-            $handlers = [
+            static $handlers = [
+                Event::VOICE_STATE_UPDATE => 'handleVoiceStateUpdate',
                 Event::VOICE_SERVER_UPDATE => 'handleVoiceServerUpdate',
                 Event::RESUMED => 'handleResume',
                 Event::READY => 'handleReady',
                 Event::GUILD_MEMBERS_CHUNK => 'handleGuildMembersChunk',
-                Event::VOICE_STATE_UPDATE => 'handleVoiceStateUpdate',
             ];
 
-            if (isset($handlers[$data->t])) {
-                $this->{$handlers[$data->t]}($data);
+            if (isset($handlers[$data->t]) && ! in_array($data->t, $this->options['disabledEvents'])) {
+                $this->{$handlers[$data->t]}(Payload::new($data->op, $data->d, $data->s, $data->t));
             }
 
             return;
@@ -775,7 +903,7 @@ class Discord
 
         $deferred = new Deferred();
         $deferred->promise()->then(function ($d) use ($data, $hData) {
-            if (is_array($d) && count($d) == 2) {
+            if (is_array($d) && count($d) === 2) {
                 list($new, $old) = $d;
             } else {
                 $new = $d;
@@ -788,7 +916,7 @@ class Discord
                 $this->emit($alternative, [$d, $this]);
             }
 
-            if ($data->t == Event::MESSAGE_CREATE && mentioned($this->client->user, $new)) {
+            if ($data->t === Event::MESSAGE_CREATE && mentioned($this->client->user, $new)) {
                 $this->emit('mention', [$new, $this, $old]);
             }
         }, function ($e) use ($data) {
@@ -820,6 +948,61 @@ class Discord
     }
 
     /**
+     * Handles `GUILD_MEMBERS_CHUNK` packets.
+     *
+     * @param  Payload    $data Packet data.
+     * @throws \Exception
+     */
+    protected function handleGuildMembersChunk(Payload $data): void
+    {
+        /** @var GuildMembersChunkData $chunkData */
+        $chunkData = $data->d;
+
+        if (! $guild = $this->guilds->get('id', $chunkData->guild_id)) {
+            $this->logger->warning('not chunking member, Guild is not cached.', ['guild_id' => $chunkData->guild_id]);
+
+            return;
+        }
+
+        $this->logger->debug('received guild member chunk', ['guild_id' => $chunkData->guild_id, 'guild_name' => $guild->name, 'chunk_count' => count($chunkData->members), 'member_collection' => $guild->members->count(), 'member_count' => $guild->member_count, 'progress' => [$chunkData->chunk_index + 1, $chunkData->chunk_count]]);
+
+        $count = $skipped = 0;
+        $await = [];
+        foreach ($chunkData->members as $member) {
+            $userId = $member->user->id;
+            if ($guild->members->offsetExists($userId)) {
+                continue;
+            }
+
+            $member = (array) $member;
+            $member['guild_id'] = $chunkData->guild_id;
+            $member['status'] = 'offline';
+            $await[] = $guild->members->cache->set($userId, $this->factory->part(Member::class, $member, true));
+
+            if (! $this->users->offsetExists($userId)) {
+                $await[] = $this->users->cache->set($userId, $this->users->create($member['user'], true));
+            }
+
+            ++$count;
+        }
+
+        all($await)->then(function () use ($guild, $count, $skipped) {
+            $membersCount = $guild->members->count();
+            $this->logger->debug('parsed '.$count.' members (skipped '.$skipped.')', ['repository_count' => $membersCount, 'actual_count' => $guild->member_count]);
+
+            if ($membersCount >= $guild->member_count) {
+                $this->largeSent = array_diff($this->largeSent, [$guild->id]);
+
+                $this->logger->debug('all users have been loaded', ['guild' => $guild->id, 'member_collection' => $membersCount, 'member_count' => $guild->member_count]);
+            }
+
+            if (count($this->largeSent) < 1) {
+                $this->ready();
+            }
+        });
+    }
+
+    /**
      * Handles heartbeat packets received by the client.
      *
      * @param object $data Packet data.
@@ -828,32 +1011,12 @@ class Discord
     {
         $this->logger->debug('received heartbeat', ['seq' => $data->d]);
 
-        $payload = [
-            'op' => Op::OP_HEARTBEAT,
-            'd' => $data->d,
-        ];
+        $payload = Payload::new(
+            Op::OP_HEARTBEAT,
+            $data->d
+        );
 
         $this->send($payload);
-    }
-
-    /**
-     * Handles heartbeat ACK packets received by the client.
-     *
-     * @param object $data Packet data.
-     */
-    protected function handleHeartbeatAck(object $data): void
-    {
-        $received = microtime(true);
-        $diff = $received - $this->heartbeatTime;
-        $time = $diff * 1000;
-
-        if (null !== $this->heartbeatAckTimer) {
-            $this->loop->cancelTimer($this->heartbeatAckTimer);
-            $this->heartbeatAckTimer = null;
-        }
-
-        $this->emit('heartbeat-ack', [$time, $this]);
-        $this->logger->debug('received heartbeat ack', ['response_time' => $time]);
     }
 
     /**
@@ -881,7 +1044,13 @@ class Discord
         $this->logger->warning('invalid session, re-identifying', ['resumable' => $data->d]);
 
         $this->loop->addTimer(2, function () use ($data) {
-            $this->identify($data->d);
+            $data->d
+                ? $this->resume(
+                    $this->token,
+                    $this->sessionId,
+                    $this->seq
+                )
+                : $this->identify();
         });
     }
 
@@ -898,62 +1067,99 @@ class Discord
     }
 
     /**
-     * Identifies with the Discord gateway with `IDENTIFY` or `RESUME` packets.
+     * Handles heartbeat ACK packets received by the client.
      *
-     * @param  bool $resume Whether resume should be enabled.
-     * @return bool
+     * @param object $data Packet data.
      */
-    protected function identify(bool $resume = true): bool
+    protected function handleHeartbeatAck(object $data): void
     {
-        if ($resume && $this->reconnecting && null !== $this->sessionId) {
-            $payload = [
-                'op' => Op::OP_RESUME,
-                'd' => [
-                    'session_id' => $this->sessionId,
-                    'seq' => $this->seq,
-                    'token' => $this->token,
-                ],
-            ];
+        $received = microtime(true);
+        $diff = $received - $this->heartbeatTime;
+        $time = $diff * 1000;
 
-            $reason = 'resuming connection';
-        } else {
-            $payload = [
-                'op' => Op::OP_IDENTIFY,
-                'd' => [
-                    'token' => $this->token,
-                    'properties' => [
-                        'os' => PHP_OS,
-                        'browser' => $this->http->getUserAgent(),
-                        'device' => $this->http->getUserAgent(),
-                        'referrer' => 'https://github.com/discord-php/DiscordPHP',
-                        'referring_domain' => 'https://github.com/discord-php/DiscordPHP',
-                    ],
-                    'compress' => true,
-                    'intents' => $this->options['intents'],
-                ],
-            ];
-
-            if (
-                array_key_exists('shardId', $this->options) &&
-                array_key_exists('shardCount', $this->options)
-            ) {
-                $payload['d']['shard'] = [
-                    (int) $this->options['shardId'],
-                    (int) $this->options['shardCount'],
-                ];
-            }
-
-            $reason = 'identifying';
+        if (null !== $this->heartbeatAckTimer) {
+            $this->loop->cancelTimer($this->heartbeatAckTimer);
+            $this->heartbeatAckTimer = null;
         }
 
-        $safePayload = $payload;
-        $safePayload['d']['token'] = 'xxxxxx';
+        $this->emit('heartbeat-ack', [$time, $this]);
+        $this->logger->debug('received heartbeat ack', ['response_time' => $time]);
+    }
 
-        $this->logger->info($reason, ['payload' => $safePayload]);
+    /**
+     * Used to trigger the initial handshake with the gateway.
+     *
+     * @link https://discord.com/developers/docs/events/gateway#identifying
+     */
+    public function identify(): void
+    {
+        $data = [
+            'token' => $this->token,
+            'properties' => [
+                'os' => PHP_OS,
+                'browser' => $this->http->getUserAgent(),
+                'device' => $this->http->getUserAgent(),
+                'referrer' => self::REFERRER,
+                'referring_domain' => self::REFERRER,
+            ],
+            'compress' => $this->usePayloadCompression,
+            'intents' => $this->options['intents'],
+        ];
+
+        if (isset($this->options['large_threshold'])) {
+            $data['large_threshold'] = $this->options['large_threshold'];
+        }
+
+        if (isset($this->options['shard'])) {
+            $data['shard'] = $this->options['shard'];
+        } elseif (isset($this->options['shard_id'], $this->options['num_shards'])) {
+            $data['shard'] = [
+                (int) $this->options['shard_id'],
+                (int) $this->options['num_shards'],
+            ];
+        } elseif (isset($this->options['shardId'], $this->options['shardCount'])) {
+            $data['shard'] = [
+                (int) $this->options['shardId'], // shard_id
+                (int) $this->options['shardCount'], // num_shards
+            ];
+        }
+
+        if (isset($this->options['presence'])) {
+            $data['presence'] = $this->options['presence'];
+        }
+
+        $payload = Payload::new(
+            Op::OP_IDENTIFY,
+            $data,
+        );
+
+        $this->logger->info('identifying', ['payload' => $payload->__debugInfo()]);
 
         $this->send($payload);
+    }
 
-        return $payload['op'] == Op::OP_RESUME;
+    /**
+     * Used to replay missed events when a disconnected client resumes.
+     *
+     * @link https://discord.com/developers/docs/events/gateway-events#resume
+     * @link https://discord.com/developers/docs/events/gateway#resuming
+     *
+     * @since 10.19.0
+     */
+    public function resume(#[\SensitiveParameter] string $token, string $session_id, int $seq): void
+    {
+        $payload = Payload::new(
+            Op::OP_RESUME,
+            [
+                'session_id' => $session_id,
+                'seq' => $seq,
+                'token' => $token,
+            ],
+        );
+
+        $this->logger->info('resuming connection', ['payload' => $payload->__debugInfo()]);
+
+        $this->send($payload);
     }
 
     /**
@@ -963,10 +1169,10 @@ class Discord
     {
         $this->logger->debug('sending heartbeat', ['seq' => $this->seq]);
 
-        $payload = [
-            'op' => Op::OP_HEARTBEAT,
-            'd' => $this->seq,
-        ];
+        $payload = Payload::new(
+            Op::OP_HEARTBEAT,
+            $this->seq
+        );
 
         $this->send($payload, true);
         $this->heartbeatTime = microtime(true);
@@ -983,75 +1189,172 @@ class Discord
     }
 
     /**
-     * Sets guild member chunking up.
+     * Used to request all members for a guild or a list of guilds.
      *
-     * @return false|void
+     * Ratelimited, once every 30 seconds per guild.
+     *
+     * The server will send Guild Members Chunk events in response with up to 1000 members per chunk until all members that match the request have been sent.
+     *
+     * @see self::handleGuildMembersChunk()
+     *
+     * @link https://discord.com/developers/docs/events/gateway-events#request-guild-members
+     *
+     * @param Guild|string       $guild_id             ID of the guild or Guild object. Required.
+     * @param array              $options
+     * @param string             $options['query']     String that username starts with, or an empty string to return all members. Required when not including user_ids.
+     * @param int                $options['limit']     Maximum number of members to send matching the query. 0 with empty query returns all. Required when including a query.
+     * @param ?bool|null         $options['presences'] Whether to include presences of matched members.
+     * @param ?string|array|null $options['user_ids']  Snowflake or array of snowflakes to specify which users to fetch. Required when not including a query.
+     * @param ?string|null       $options['nonce']     Nonce to identify the Guild Members Chunk response.
+     *
+     * @throws \InvalidArgumentException Either query or user_ids must be set.
+     *
+     * @since 10.19.0
      */
-    protected function setupChunking()
+    public function requestGuildMembers($guild_id, array $options = []): void
     {
-        if ($this->options['loadAllMembers'] === false) {
-            $this->logger->info('loadAllMembers option is disabled, not setting chunking up');
-
-            return $this->ready();
+        if (! isset($options['query']) && ! isset($options['user_ids'])) {
+            if (! isset($options['limit'])) {
+                $options['limit'] = 0;
+            }
+            $options['query'] = '';
         }
 
-        $checkForChunks = function () {
-            if ((count($this->largeGuilds) < 1) && (count($this->largeSent) < 1)) {
-                $this->ready();
+        if (! is_string($guild_id)) {
+            $guild_id = $guild_id->id;
+        }
 
-                return;
+        $payloadData = [
+            'guild_id' => $guild_id,
+        ];
+
+        if (isset($options['user_ids'])) {
+            // If user_ids is set, query and limit must NOT be set
+            $payloadData['user_ids'] = is_array($options['user_ids'])
+                ? array_values($options['user_ids'])
+                : [$options['user_ids']];
+        } else {
+            // If user_ids is not set, query and limit are required
+            $payloadData['query'] = $options['query'] ?? '';
+            $payloadData['limit'] = $options['limit'] ?? 0;
+        }
+
+        if (array_key_exists('presences', $options)) {
+            $payloadData['presences'] = (bool) $options['presences'];
+        }
+
+        if (isset($options['nonce'])) {
+            $payloadData['nonce'] = (string) $options['nonce'];
+        }
+
+        $payload = Payload::new(
+            Op::OP_REQUEST_GUILD_MEMBERS,
+            $payloadData,
+        );
+
+        $this->send($payload);
+    }
+
+    /**
+     * Used to request soundboard sounds for a list of guilds. The server will send Soundboard Sounds events for each guild in response.
+     *
+     * @see \Discord\WebSockets\Events\SoundboardSounds
+     *
+     * @link https://discord.com/developers/docs/events/gateway-events#request-soundboard-sounds
+     *
+     * @param array $guildIds Array of guild IDs.
+     */
+    public function requestSoundboardSounds(array $guildIds): void
+    {
+        $payload = Payload::new(
+            Op::OP_REQUEST_SOUNDBOARD_SOUNDS,
+            [
+                'guild_ids' => $guildIds,
+            ],
+        );
+
+        $this->send($payload);
+    }
+
+    /**
+     * Sent when a client wants to join, move, or disconnect from a voice channel.
+     *
+     * @link https://discord.com/developers/docs/events/gateway-events#update-voice-state
+     *
+     * @param Guild|string        $guild_id   ID of the guild.
+     * @param Channel|string|null $channel_id ID of the voice channel to join, or null to disconnect.
+     * @param bool                $self_mute  Whether the client is muted.
+     * @param bool                $self_deaf  Whether the client is deafened.
+     *
+     * @since 10.19.0
+     */
+    public function updateVoiceState($guild_id, $channel_id = null, bool $self_mute = false, bool $self_deaf = false): void
+    {
+        if (! is_string($guild_id)) {
+            $guild_id = $guild_id->id;
+        }
+
+        if (isset($channel_id) && ! is_string($channel_id)) {
+            $channel_id = $channel_id->id;
+        }
+
+        $payload = Payload::new(
+            Op::OP_UPDATE_VOICE_STATE,
+            [
+                'guild_id' => $guild_id,
+                'channel_id' => $channel_id,
+                'self_mute' => $self_mute,
+                'self_deaf' => $self_deaf,
+            ]
+        );
+
+        $this->send($payload);
+    }
+
+    /**
+     * Sent by the client to indicate a presence or status update.
+     *
+     * @link https://discord.com/developers/docs/events/gateway-events#update-presence
+     *
+     * @param Activity|null $activity The current client activity, or null.
+     *                                Note: Both name and state must be set to use custom, and the only valid fields are `name`, `state`, `type` and `url`.
+     * @param bool          $idle     Whether the client is idle.
+     * @param string        $status   The current status of the client.
+     *                                Must be one of the following:
+     *                                online, dnd, idle, invisible, offline
+     * @param bool          $afk      Whether the client is AFK.
+     *
+     * @throws \UnexpectedValueException
+     */
+    public function updatePresence(?Activity $activity = null, bool $idle = false, string $status = 'online', bool $afk = false): void
+    {
+        $idle = $idle ? time() * 1000 : null;
+
+        if (null !== $activity) {
+            $activity = $activity->getRawAttributes();
+
+            if (! in_array($activity['type'], [Activity::TYPE_PLAYING, Activity::TYPE_STREAMING, Activity::TYPE_LISTENING, Activity::TYPE_WATCHING, Activity::TYPE_CUSTOM, Activity::TYPE_COMPETING])) {
+                throw new \UnexpectedValueException("The given activity type ({$activity['type']}) is invalid.");
             }
+        }
 
-            if (count($this->largeGuilds) < 1) {
-                $this->logger->debug('unprocessed chunks', $this->largeSent);
+        static $allowed = ['online', 'dnd', 'idle', 'invisible', 'offline'];
 
-                return;
-            }
+        if (! in_array($status, $allowed)) {
+            $status = 'online';
+        }
 
-            if (is_array($this->options['loadAllMembers'])) {
-                foreach ($this->largeGuilds as $key => $guild) {
-                    if (! in_array($guild, $this->options['loadAllMembers'])) {
-                        $this->logger->debug('not fetching members for guild ID '.$guild);
-                        unset($this->largeGuilds[$key]);
-                    }
-                }
-            }
+        $payload = Payload::new(
+            Op::OP_UPDATE_PRESENCE,
+            [
+                'since' => $idle,
+                'activities' => [$activity],
+                'status' => $status,
+                'afk' => $afk,
+            ],
+        );
 
-            $chunks = array_chunk($this->largeGuilds, 50);
-            $this->logger->debug('sending '.count($chunks).' chunks with '.count($this->largeGuilds).' large guilds overall');
-            $this->largeSent = array_merge($this->largeGuilds, $this->largeSent);
-            $this->largeGuilds = [];
-
-            $sendChunks = function () use (&$sendChunks, &$chunks) {
-                $chunk = array_pop($chunks);
-
-                if (null === $chunk) {
-                    return;
-                }
-
-                $this->logger->debug('sending chunk with '.count($chunk).' large guilds');
-
-                foreach ($chunk as $guild_id) {
-                    $payload = [
-                        'op' => Op::OP_GUILD_MEMBER_CHUNK,
-                        'd' => [
-                            'guild_id' => $guild_id,
-                            'query' => '',
-                            'limit' => 0,
-                        ],
-                    ];
-
-                    $this->send($payload);
-                }
-                $this->loop->addTimer(1, $sendChunks);
-            };
-
-            $sendChunks();
-        };
-
-        $this->loop->addPeriodicTimer(5, $checkForChunks);
-        $this->logger->info('set up chunking, checking for chunks every 5 seconds');
-        $checkForChunks();
+        $this->send($payload);
     }
 
     /**
@@ -1076,10 +1379,11 @@ class Discord
     /**
      * Initializes the connection with the Discord gateway.
      */
-    protected function connectWs(): void
+    public function connectWs(): void
     {
         $this->setGateway()->then(function ($gateway) {
             if (isset($gateway['session']) && $session = $gateway['session']) {
+                $this->logger->debug('session data received', ['session' => $session]);
                 if ($session['remaining'] < 2) {
                     $this->logger->error('exceeded number of reconnects allowed, waiting before attempting reconnect', $session);
                     $this->loop->addTimer($session['reset_after'] / 1000, function () {
@@ -1099,41 +1403,23 @@ class Discord
     }
 
     /**
-     * Requests soundboard sounds for the specified guilds.
-     *
-     * @param array $guildIds Array of guild IDs.
-     */
-    public function requestSoundboardSounds(array $guildIds): void
-    {
-        $payload = [
-            'op' => Op::REQUEST_SOUNDBOARD_SOUNDS,
-            'd' => [
-                'guild_ids' => $guildIds
-            ],
-        ];
-
-        $this->send($payload);
-    }
-
-    /**
      * Sends a packet to the Discord gateway.
      *
-     * @param array $data Packet data.
+     * @param Payload|array $data Packet data.
      */
-    protected function send(array $data, bool $force = false): void
+    public function send(object|array $data, bool $force = false): void
     {
         // Wait until payload count has been reset
         // Keep 5 payloads for heartbeats as required
-        if ($this->payloadCount >= 115 && ! $force) {
+        if (! $force && $this->payloadCount >= 115) {
             $this->logger->debug('payload not sent, waiting', ['payload' => $data]);
-            $this->once('payload_count_reset', function () use ($data) {
-                $this->send($data);
-            });
-        } else {
-            ++$this->payloadCount;
-            $data = json_encode($data);
-            $this->ws->send($data);
+            $this->once('payload_count_reset', fn () => $this->send($data));
+
+            return;
         }
+
+        ++$this->payloadCount;
+        $this->ws->send(json_encode($data));
     }
 
     /**
@@ -1146,6 +1432,11 @@ class Discord
             return false;
         }
         $this->emittedInit = true;
+
+        if (class_exists(Manager::class)) {
+            $this->voice = new Manager($this);
+            $this->logger->info('voice class initialized');
+        }
 
         $this->logger->info('client is ready');
         $this->emit('init', [$this]);
@@ -1161,47 +1452,28 @@ class Discord
     }
 
     /**
-     * Updates the clients presence.
+     * Lists voice regions.
      *
-     * @param Activity|null $activity The current client activity, or null.
-     *                                Note: The activity type _cannot_ be custom, and the only valid fields are `name`, `type` and `url`.
-     * @param bool          $idle     Whether the client is idle.
-     * @param string        $status   The current status of the client.
-     *                                Must be one of the following:
-     *                                online, dnd, idle, invisible, offline
-     * @param bool          $afk      Whether the client is AFK.
-     *
-     * @throws \UnexpectedValueException
+     * @return PromiseInterface<ExCollectionInterface<Region>|Region[]> A promise that resolves to a collection of voice regions.
      */
-    public function updatePresence(?Activity $activity = null, bool $idle = false, string $status = 'online', bool $afk = false): void
+    public function listVoiceRegions(): PromiseInterface
     {
-        $idle = $idle ? time() * 1000 : null;
+        if (null !== $this->regions) {
+            return resolve($this->regions);
+        }
 
-        if (null !== $activity) {
-            $activity = $activity->getRawAttributes();
+        return $this->http->get(Endpoint::LIST_VOICE_REGIONS)->then(function ($response) {
+            /** @var ExCollectionInterface<Region> $regions */
+            $regions = $this->collectionClass::for(Region::class);
 
-            if (! in_array($activity['type'], [Activity::TYPE_GAME, Activity::TYPE_STREAMING, Activity::TYPE_LISTENING, Activity::TYPE_WATCHING, Activity::TYPE_CUSTOM, Activity::TYPE_COMPETING])) {
-                throw new \UnexpectedValueException("The given activity type ({$activity['type']}) is invalid.");
+            foreach ($response as $region) {
+                $regions->pushItem($this->factory->part(Region::class, (array) $region, true));
             }
-        }
 
-        $allowed = ['online', 'dnd', 'idle', 'invisible', 'offline'];
+            $this->regions = $regions;
 
-        if (! in_array($status, $allowed)) {
-            $status = 'online';
-        }
-
-        $payload = [
-            'op' => Op::OP_PRESENCE_UPDATE,
-            'd' => [
-                'since' => $idle,
-                'activities' => [$activity],
-                'status' => $status,
-                'afk' => $afk,
-            ],
-        ];
-
-        $this->send($payload);
+            return $regions;
+        });
     }
 
     /**
@@ -1213,111 +1485,102 @@ class Discord
      */
     public function getVoiceClient(string $guild_id): ?VoiceClient
     {
-        return $this->voiceClients[$guild_id] ?? null;
+        return isset($this->voice) ? ($this->voice->clients[$guild_id] ?? null) : null;
     }
 
     /**
      * Joins a voice channel.
      *
-     * @param Channel              $channel The channel to join.
-     * @param bool                 $mute    Whether you should be mute when you join the channel.
-     * @param bool                 $deaf    Whether you should be deaf when you join the channel.
-     * @param LoggerInterface|null $logger  Voice client logger. If null, uses same logger as Discord client.
+     * @param Channel $channel The channel to join.
+     * @param bool    $mute    Whether you should be mute when you join the channel.
+     * @param bool    $deaf    Whether you should be deaf when you join the channel.
      *
-     * @throws \RuntimeException
+     * @throws \RuntimeException If the voice manager is not initialized.
      *
      * @since 10.0.0 Removed argument $check that has no effect (it is always checked)
      * @since 4.0.0
      *
      * @return PromiseInterface<VoiceClient>
      */
-    public function joinVoiceChannel(Channel $channel, $mute = false, $deaf = true, ?LoggerInterface $logger = null): PromiseInterface
+    public function joinVoiceChannel(Channel $channel, $mute = false, $deaf = true): PromiseInterface
     {
-        $deferred = new Deferred();
+        return isset($this->voice)
+            ? $this->voice->joinChannel($channel, $this, $this->voice_sessions, $mute, $deaf)
+            : reject(new \RuntimeException('Voice manager is not initialized.'));
+    }
 
-        if (! $channel->isVoiceBased()) {
-            $deferred->reject(new \RuntimeException('Channel must allow voice.'));
+    /**
+     * Handles voice state update events.
+     *
+     * @param VoiceServerUpdate $vs      The voice state update event.
+     * @param Channel           $channel The voice channel.
+     * @param array             $data    Reference to the data array for the voice client.
+     *
+     * @todo Remove this function in v11, as it's no longer needed.
+     */
+    protected function voiceStateUpdate(VoiceServerUpdate $vs, Channel $channel, array &$data): void
+    {
+        if ($vs->guild_id !== $channel->guild_id) {
+            return; // This voice state update isn't for our guild.
+        }
+        $this->voice_sessions[$channel->guild_id] = $vs->session_id;
+        $this->removeListener(Event::VOICE_STATE_UPDATE, fn () => $this->voiceStateUpdate($vs, $channel, $data));
+    }
 
-            return $deferred->promise();
+    /**
+     * Handles voice server update events.
+     *
+     * @param VoiceServerUpdate $vs       The voice server update event.
+     * @param Channel           $channel  The voice channel.
+     * @param array             $data     Reference to the data array for the voice client.
+     * @param Deferred          $deferred Reference to the deferred object for the voice client. Rejects on error or if voice manager is not initialized.
+     */
+    protected function voiceServerUpdate(VoiceServerUpdate $vs, Channel $channel, array &$data, Deferred &$deferred): void
+    {
+        if (! isset($this->voice)) {
+            $deferred->reject(new \RuntimeException('Voice manager is not initialized.'));
+
+            return;
         }
 
-        if (isset($this->voiceClients[$channel->guild_id])) {
-            $deferred->reject(new \RuntimeException('You cannot join more than one voice channel per guild.'));
-
-            return $deferred->promise();
+        if ($vs->guild_id !== $channel->guild_id) {
+            return; // This voice server update isn't for our guild.
         }
 
-        $data = [
-            'user_id' => $this->id,
-            'deaf' => $deaf,
-            'mute' => $mute,
-        ];
+        $data['token'] = $vs->token;
+        $data['endpoint'] = $vs->endpoint;
+        $data['dnsConfig'] = $this->options['dnsConfig'];
+        $this->logger->info('received token and endpoint for voice session', ['guild' => $channel->guild_id, 'token' => $vs->token, 'endpoint' => $vs->endpoint]);
 
-        $voiceStateUpdate = function ($vs, $discord) use ($channel, &$data, &$voiceStateUpdate) {
-            if ($vs->guild_id != $channel->guild_id) {
-                return; // This voice state update isn't for our guild.
-            }
+        $vc = $this->voice->clients[$channel->guild_id] ??= new VoiceClient($this, $channel, $this->voice_sessions, $data, deferred: $deferred, manager: $this->voice);
 
-            $data['session'] = $vs->session_id;
-            $this->logger->info('received session id for voice session', ['guild' => $channel->guild_id, 'session_id' => $vs->session_id]);
-            $this->removeListener(Event::VOICE_STATE_UPDATE, $voiceStateUpdate);
-        };
+        $vc->once('ready', function () use ($vc, $deferred) {
+            $this->logger->info('voice client is ready');
+            $deferred->resolve($vc);
+        });
+        $vc->once('error', function ($e) use ($deferred) {
+            $this->logger->error('error initializing voice client', ['e' => $e->getMessage()]);
+            $deferred->reject($e);
+        });
+        $vc->once('close', function () use ($channel) {
+            $this->logger->warning('voice client closed');
+            unset($this->voice->clients[$channel->guild_id]);
+        });
 
-        $voiceServerUpdate = function ($vs, $discord) use ($channel, &$data, &$voiceServerUpdate, $deferred, $logger) {
-            if ($vs->guild_id != $channel->guild_id) {
-                return; // This voice server update isn't for our guild.
-            }
+        $vc->setData(
+            array_merge(
+                $vc->data,
+                [
+                    'token' => $vs->token,
+                    'endpoint' => $vs->endpoint,
+                    'session' => $vc->data['session'] ?? null,
+                ],
+                ['dnsConfig' => $this->options['dnsConfig']]
+            )
+        );
 
-            $data['token'] = $vs->token;
-            $data['endpoint'] = $vs->endpoint;
-            $data['dnsConfig'] = $discord->options['dnsConfig'];
-            $this->logger->info('received token and endpoint for voice session', ['guild' => $channel->guild_id, 'token' => $vs->token, 'endpoint' => $vs->endpoint]);
-
-            if (null === $logger) {
-                $logger = $this->logger;
-            }
-
-            $vc = new VoiceClient($this->ws, $this->loop, $channel, $logger, $data);
-
-            $vc->once('ready', function () use ($vc, $deferred, $channel, $logger) {
-                $logger->info('voice client is ready');
-                $this->voiceClients[$channel->guild_id] = $vc;
-
-                $vc->setBitrate($channel->bitrate);
-                $logger->info('set voice client bitrate', ['bitrate' => $channel->bitrate]);
-                $deferred->resolve($vc);
-            });
-            $vc->once('error', function ($e) use ($deferred, $logger) {
-                $logger->error('error initializing voice client', ['e' => $e->getMessage()]);
-                $deferred->reject($e);
-            });
-            $vc->once('close', function () use ($channel, $logger) {
-                $logger->warning('voice client closed');
-                unset($this->voiceClients[$channel->guild_id]);
-            });
-
-            $vc->start();
-
-            $this->voiceLoggers[$channel->guild_id] = $logger;
-            $this->removeListener(Event::VOICE_SERVER_UPDATE, $voiceServerUpdate);
-        };
-
-        $this->on(Event::VOICE_STATE_UPDATE, $voiceStateUpdate);
-        $this->on(Event::VOICE_SERVER_UPDATE, $voiceServerUpdate);
-
-        $payload = [
-            'op' => Op::OP_VOICE_STATE_UPDATE,
-            'd' => [
-                'guild_id' => $channel->guild_id,
-                'channel_id' => $channel->id,
-                'self_mute' => $mute,
-                'self_deaf' => $deaf,
-            ],
-        ];
-
-        $this->send($payload);
-
-        return $deferred->promise();
+        $this->voiceLoggers[$channel->guild_id] = $this->logger;
+        $this->removeListener(Event::VOICE_SERVER_UPDATE, fn () => $this->voiceServerUpdate($vs, $channel, $data, $deferred));
     }
 
     /**
@@ -1330,43 +1593,23 @@ class Discord
     protected function setGateway(?string $gateway = null): PromiseInterface
     {
         $deferred = new Deferred();
-        $defaultSession = [
-            'total' => 1000,
-            'remaining' => 1000,
-            'reset_after' => 0,
-            'max_concurrency' => 1,
-        ];
-
-        $buildParams = function ($gateway, $session = null) use ($deferred, $defaultSession) {
-            $session = $session ?? $defaultSession;
-            $params = [
-                'v' => self::GATEWAY_VERSION,
-                'encoding' => $this->encoding,
-            ];
-
-            if ($this->zlibDecompressor = inflate_init(ZLIB_ENCODING_DEFLATE)) {
-                $params['compress'] = 'zlib-stream';
-            }
-
-            $query = http_build_query($params);
-            $this->gateway = trim($gateway, '/').'/?'.$query;
-
-            $deferred->resolve(['gateway' => $this->gateway, 'session' => (array) $session]);
-        };
 
         if (null === $gateway) {
-            $this->http->get(Endpoint::GATEWAY_BOT)->then(function ($response) use ($buildParams) {
-                if ($response->shards > 1) {
+            $this->http->get(Endpoint::GATEWAY_BOT)->then(function ($response) use ($deferred) {
+                /** @var GetGatewayBot $part */
+                $part = $this->factory->part(GetGatewayBot::class, (array) $response);
+                $this->emit('gateway', [$part, $this]);
+                if ($part->shards > 1) {
                     $this->logger->info('Please contact the DiscordPHP devs at https://discord.gg/dphp or https://github.com/discord-php/DiscordPHP/issues if you are interested in assisting us with sharding support development.');
                 }
-                $buildParams($this->resume_gateway_url ?? $response->url, $response->session_start_limit);
-            }, function ($e) use ($buildParams) {
+                $this->buildParams($deferred, $this->resume_gateway_url ?? $part->url, $part->session_start_limit);
+            }, function ($e) use ($deferred) {
                 // Can't access the API server so we will use the default gateway.
                 $this->logger->warning('could not retrieve gateway, using default');
-                $buildParams('wss://gateway.discord.gg');
+                $this->buildParams($deferred, 'wss://gateway.discord.gg');
             });
         } else {
-            $buildParams($gateway);
+            $this->buildParams($deferred, $gateway);
         }
 
         return $deferred->promise()->then(function ($gateway) {
@@ -1378,6 +1621,41 @@ class Discord
 
             return $e;
         });
+    }
+
+    /**
+     * Builds the gateway connection parameters and resolves the deferred with the gateway URL and session information.
+     *
+     * @param Deferred          $deferred The deferred object to resolve with the gateway and session data.
+     * @param string            $gateway  The base gateway URL to connect to.
+     * @param SessionStartLimit $session  Optional session information. If null, a default session is used.
+     */
+    protected function buildParams(Deferred $deferred, string $gateway, ?SessionStartLimit $session = null): void
+    {
+        static $defaultSession = [
+            'total' => 1000,
+            'remaining' => 1000,
+            'reset_after' => 0,
+            'max_concurrency' => 1,
+        ];
+
+        $session = $session ?? $this->factory->part(SessionStartLimit::class, $defaultSession);
+        $params = [
+            'v' => self::GATEWAY_VERSION,
+            'encoding' => $this->encoding,
+        ];
+
+        if ($this->useTransportCompression) {
+            if ($this->zlibDecompressor = inflate_init(ZLIB_ENCODING_DEFLATE)) {
+                $params['compress'] = 'zlib-stream';
+            }
+            // @todo: add support for zstd-stream
+        }
+
+        $query = http_build_query($params);
+        $this->gateway = trim($gateway, '/').'/?'.$query;
+
+        $deferred->resolve(['gateway' => $this->gateway, 'session' => $session->jsonSerialize()]);
     }
 
     /**
@@ -1396,18 +1674,26 @@ class Discord
             ->setRequired('token')
             ->setDefined([
                 'token',
-                'shardId',
-                'shardCount',
                 'loop',
                 'logger',
                 'loadAllMembers',
                 'disabledEvents',
                 'storeMessages',
                 'retrieveBans',
+                'large_threshold',
+                'shard',
+                'shard_id',
+                'num_shards',
+                'shardId',
+                'shardCount',
+                'presence',
                 'intents',
                 'socket_options',
                 'dnsConfig',
                 'cache',
+                'collection',
+                'useTransportCompression',
+                'usePayloadCompression',
             ])
             ->setDefaults([
                 'logger' => null,
@@ -1415,9 +1701,19 @@ class Discord
                 'disabledEvents' => [],
                 'storeMessages' => false,
                 'retrieveBans' => false,
+                'large_threshold' => null,
+                'shard' => null,
+                'shard_id' => null,
+                'num_shards' => null,
+                'shardId' => null,
+                'shardCount' => null,
+                'presence' => null,
                 'intents' => Intents::getDefaultIntents(),
                 'socket_options' => [],
                 'cache' => [AbstractRepository::class => null], // use LegacyCacheWrapper
+                'collection' => Collection::class,
+                'useTransportCompression' => true,
+                'usePayloadCompression' => true,
             ])
             ->setAllowedTypes('token', 'string')
             ->setAllowedTypes('logger', ['null', LoggerInterface::class])
@@ -1426,6 +1722,13 @@ class Discord
             ->setAllowedTypes('disabledEvents', 'array')
             ->setAllowedTypes('storeMessages', 'bool')
             ->setAllowedTypes('retrieveBans', ['bool', 'array'])
+            ->setAllowedTypes('large_threshold', ['null', 'int'])
+            ->setAllowedTypes('shard', ['null', 'array'])
+            ->setAllowedTypes('shard_id', ['null', 'int'])
+            ->setAllowedTypes('num_shards', ['null', 'int'])
+            ->setAllowedTypes('shardId', ['null', 'int'])
+            ->setAllowedTypes('shardCount', ['null', 'int'])
+            ->setAllowedTypes('presence', ['null', 'array'])
             ->setAllowedTypes('intents', ['array', 'int'])
             ->setAllowedTypes('socket_options', 'array')
             ->setAllowedTypes('dnsConfig', ['string', \React\Dns\Config\Config::class])
@@ -1440,14 +1743,24 @@ class Discord
                 }
 
                 return $value;
-            });
+            })
+            ->setAllowedTypes('collection', 'string')
+            ->setNormalizer('collection', function ($options, $value) {
+                if (is_string($value) && class_exists($value) && is_subclass_of($value, ExCollectionInterface::class)) {
+                    return $value;
+                }
+
+                return Collection::class;
+            })
+            ->setAllowedTypes('useTransportCompression', 'bool')
+            ->setAllowedTypes('usePayloadCompression', 'bool');
 
         $options = $resolver->resolve($options);
 
         $options['loop'] ??= Loop::get();
 
         if (null === $options['logger']) {
-            $streamHandler = new StreamHandler('php://stdout', Monolog::DEBUG);
+            $streamHandler = new StreamHandler('php://stdout', Level::Debug);
             $lineFormatter = new LineFormatter(null, null, true, true);
             $streamHandler->setFormatter($lineFormatter);
             $logger = new Monolog('DiscordPHP', [$streamHandler]);
@@ -1539,7 +1852,7 @@ class Discord
      *
      * @see Factory::create()
      *
-     * @deprecated 10.0.0 Use `new $class($discord, ...)`.
+     * @since 10.0.0 Use `new $class($discord, ...)`.
      */
     public function factory(string $class, $data = [], bool $created = false)
     {
@@ -1615,6 +1928,18 @@ class Discord
     }
 
     /**
+     * Gets the collection class being used by the client.
+     *
+     * @return string
+     *
+     * @since 10.43.1
+     */
+    public function getCollectionClass(): string
+    {
+        return $this->collectionClass;
+    }
+
+    /**
      * Handles dynamic get calls to the client.
      *
      * @param string $name Variable name.
@@ -1623,7 +1948,7 @@ class Discord
      */
     public function __get(string $name)
     {
-        $allowed = ['loop', 'options', 'logger', 'http', 'application_commands'];
+        static $allowed = ['loop', 'options', 'logger', 'http', 'application_commands'];
 
         if (in_array($name, $allowed)) {
             return $this->{$name};
@@ -1652,6 +1977,16 @@ class Discord
     }
 
     /**
+     * Sets the client instance.
+     *
+     * @param Client $client The client instance.
+     */
+    public function setClient(Client $client): void
+    {
+        $this->client = $client;
+    }
+
+    /**
      * Gets a cached channel.
      *
      * @param string|int $channel_id ID of the channel.
@@ -1676,7 +2011,7 @@ class Discord
     /**
      * Add listener for incoming application command from interaction.
      *
-     * @param string|array  $name
+     * @param array|string  $names
      * @param callable|null $callback
      * @param callable|null $autocomplete_callback
      *
@@ -1684,14 +2019,15 @@ class Discord
      *
      * @return RegisteredCommand
      */
-    public function listenCommand($name, ?callable $callback = null, ?callable $autocomplete_callback = null): RegisteredCommand
+    public function listenCommand($names, ?callable $callback = null, ?callable $autocomplete_callback = null): RegisteredCommand
     {
-        if (is_array($name) && count($name) == 1) {
-            $name = array_shift($name);
+        if (! is_array($names)) {
+            $names = [$names];
         }
 
         // registering base command
-        if (! is_array($name) || count($name) == 1) {
+        if (count($names) === 1) {
+            $name = array_shift($names);
             if (isset($this->application_commands[$name])) {
                 throw new \LogicException("The command `{$name}` already exists.");
             }
@@ -1699,13 +2035,13 @@ class Discord
             return $this->application_commands[$name] = new RegisteredCommand($this, $name, $callback, $autocomplete_callback);
         }
 
-        $baseCommand = array_shift($name);
+        $baseCommand = array_shift($names);
 
         if (! isset($this->application_commands[$baseCommand])) {
             $this->listenCommand($baseCommand);
         }
 
-        return $this->application_commands[$baseCommand]->addSubCommand($name, $callback, $autocomplete_callback);
+        return $this->application_commands[$baseCommand]->addSubCommand($names, $callback, $autocomplete_callback);
     }
 
     /**
@@ -1756,7 +2092,7 @@ class Discord
      */
     public function __debugInfo(): array
     {
-        $secrets = [
+        static $secrets = [
             'token' => '*****',
         ];
         $replace = array_intersect_key($secrets, $this->options);

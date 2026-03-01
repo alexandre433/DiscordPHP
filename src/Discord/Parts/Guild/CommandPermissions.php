@@ -1,9 +1,12 @@
 <?php
 
+declare(strict_types=1);
+
 /*
  * This file is a part of the DiscordPHP project.
  *
- * Copyright (c) 2015-present David Cole <david.cole1340@gmail.com>
+ * Copyright (c) 2015-2022 David Cole <david.cole1340@gmail.com>
+ * Copyright (c) 2020-present Valithor Obsidion <valithor@discordphp.org>
  *
  * This file is subject to the MIT license that is bundled
  * with this source code in the LICENSE.md file.
@@ -12,8 +15,7 @@
 namespace Discord\Parts\Guild;
 
 use Discord\Helpers\BigInt;
-use Discord\Helpers\Collection;
-use Discord\Helpers\CollectionInterface;
+use Discord\Helpers\ExCollectionInterface;
 use Discord\Parts\Interactions\Command\Permission;
 use Discord\Parts\Part;
 
@@ -25,16 +27,16 @@ use Discord\Parts\Part;
  * @since 10.0.0 Refactored from Interactions\Command\Overwrite to Guild\CommandPermissions
  * @since 7.0.0
  *
- * @property      string                  $id             The id of the command or the application ID if no overwrites.
- * @property      string                  $application_id The id of the application the command belongs to.
- * @property      string                  $guild_id       The id of the guild.
- * @property-read Guild|null              $guild
- * @property      CollectionInterface|Permission[] $permissions    The permissions for the command in the guild.
+ * @property      string                                         $id             The id of the command or the application ID if no overwrites.
+ * @property      string                                         $application_id The id of the application the command belongs to.
+ * @property      string                                         $guild_id       The id of the guild.
+ * @property-read Guild|null                                     $guild
+ * @property      ExCollectionInterface<Permission>|Permission[] $permissions    The permissions for the command in the guild.
  */
 class CommandPermissions extends Part
 {
     /**
-     * {@inheritDoc}
+     * @inheritDoc
      */
     protected $fillable = [
         'id',
@@ -56,21 +58,15 @@ class CommandPermissions extends Part
     /**
      * Gets the permissions attribute.
      *
-     * @return CollectionInterface|Permission[] A collection of permissions.
+     * @return ExCollectionInterface<Permission>|Permission[] A collection of permissions.
      */
-    protected function getPermissionsAttribute(): CollectionInterface
+    protected function getPermissionsAttribute(): ExCollectionInterface
     {
-        $permissions = Collection::for(Permission::class);
-
-        foreach ($this->attributes['permissions'] ?? [] as $permission) {
-            $permissions->pushItem($this->factory->part(Permission::class, (array) $permission, true));
-        }
-
-        return $permissions;
+        return $this->attributeCollectionHelper('permissions', Permission::class);
     }
 
     /**
-     * {@inheritDoc}
+     * @inheritDoc
      */
     public function getUpdatableAttributes(): array
     {
@@ -80,7 +76,7 @@ class CommandPermissions extends Part
     }
 
     /**
-     * {@inheritDoc}
+     * @inheritDoc
      */
     public function getRepositoryAttributes(): array
     {

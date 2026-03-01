@@ -1,9 +1,12 @@
 <?php
 
+declare(strict_types=1);
+
 /*
  * This file is a part of the DiscordPHP project.
  *
- * Copyright (c) 2015-present David Cole <david.cole1340@gmail.com>
+ * Copyright (c) 2015-2022 David Cole <david.cole1340@gmail.com>
+ * Copyright (c) 2020-present Valithor Obsidion <valithor@discordphp.org>
  *
  * This file is subject to the MIT license that is bundled
  * with this source code in the LICENSE.md file.
@@ -11,23 +14,33 @@
 
 namespace Discord\Builders\Components;
 
+use Discord\Builders\ComponentsTrait;
+
 /**
  * An Action Row is a non-interactive container component for other types of
  * components.
  * It has a type: 1 and a sub-array of components of other types.
  *
- * @link https://discord.com/developers/docs/interactions/message-components#action-rows
+ * @link https://discord.com/developers/docs/components/reference#action-rows
  *
  * @since 7.0.0
+ *
+ * @property int               $type       1 for action row component.
+ * @property ComponentObject[] $components Up to 5 interactive button components or a single select component.
  */
-class ActionRow extends Component
+class ActionRow extends Layout
 {
+    use ComponentsTrait;
+
+    /** Usage of ActionRow in Modal is deprecated. Use `ComponentObject::Label` as the top-level container. */
+    public const USAGE = ['Message', 'Modal'];
+
     /**
-     * Components contained by the action row.
+     * Component type.
      *
-     * @var Component[]
+     * @var int
      */
-    private $components = [];
+    protected $type = ComponentObject::TYPE_ACTION_ROW;
 
     /**
      * Creates a new action row.
@@ -42,21 +55,27 @@ class ActionRow extends Component
     /**
      * Adds a component to the action row.
      *
-     * @param Component $component Component to add.
+     * @param ComponentObject $component Component to add.
      *
-     * @throws \InvalidArgumentException
-     * @throws \OverflowException
+     * @throws \InvalidArgumentException Component is not a valid type.
+     * @throws \OverflowException        If the action row has more than 5 components.
+     *
+     * @since 10.19.0
      *
      * @return $this
      */
-    public function addComponent(Component $component): self
+    public function addComponent($component): self
     {
         if ($component instanceof ActionRow) {
             throw new \InvalidArgumentException('You cannot add another `ActionRow` to this action row.');
         }
 
         if ($component instanceof SelectMenu) {
-            throw new \InvalidArgumentException('Cannot add a select menu to an action row.');
+            foreach ($this->components as $existingComponent) {
+                if ($existingComponent instanceof SelectMenu) {
+                    throw new \InvalidArgumentException('You cannot add more than one select menu to an action row.');
+                }
+            }
         }
 
         if (count($this->components) >= 5) {
@@ -71,13 +90,13 @@ class ActionRow extends Component
     /**
      * Removes a component from the action row.
      *
-     * @param Component $component Component to remove.
+     * @param ComponentObject $component Component to remove.
      *
      * @return $this
      */
-    public function removeComponent(Component $component): self
+    public function removeComponent(ComponentObject $component): self
     {
-        if (($idx = array_search($component, $this->components)) !== null) {
+        if (($idx = array_search($component, $this->components)) !== false) {
             array_splice($this->components, $idx, 1);
         }
 
@@ -99,7 +118,7 @@ class ActionRow extends Component
     /**
      * Returns all the components in the action row.
      *
-     * @return Component[]
+     * @return ComponentObject[]
      */
     public function getComponents(): array
     {
@@ -107,13 +126,19 @@ class ActionRow extends Component
     }
 
     /**
-     * {@inheritDoc}
+     * @inheritDoc
      */
     public function jsonSerialize(): array
     {
-        return [
-            'type' => Component::TYPE_ACTION_ROW,
+        $content = [
+            'type' => $this->type,
             'components' => $this->components,
         ];
+
+        if (isset($this->id)) {
+            $content['id'] = $this->id;
+        }
+
+        return $content;
     }
 }

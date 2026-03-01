@@ -1,9 +1,12 @@
 <?php
 
+declare(strict_types=1);
+
 /*
  * This file is a part of the DiscordPHP project.
  *
- * Copyright (c) 2015-present David Cole <david.cole1340@gmail.com>
+ * Copyright (c) 2015-2022 David Cole <david.cole1340@gmail.com>
+ * Copyright (c) 2020-present Valithor Obsidion <valithor@discordphp.org>
  *
  * This file is subject to the MIT license that is bundled
  * with this source code in the LICENSE.md file.
@@ -63,6 +66,10 @@ abstract class Event
     public const GUILD_SCHEDULED_EVENT_USER_ADD = 'GUILD_SCHEDULED_EVENT_USER_ADD';
     public const GUILD_SCHEDULED_EVENT_USER_REMOVE = 'GUILD_SCHEDULED_EVENT_USER_REMOVE';
 
+    public const GUILD_SCHEDULED_EVENT_EXCEPTION_CREATE = 'GUILD_SCHEDULED_EVENT_EXCEPTION_CREATE';
+    public const GUILD_SCHEDULED_EVENT_EXCEPTION_UPDATE = 'GUILD_SCHEDULED_EVENT_EXCEPTION_UPDATE';
+    public const GUILD_SCHEDULED_EVENT_EXCEPTION_DELETE = 'GUILD_SCHEDULED_EVENT_EXCEPTION_DELETE';
+
     public const GUILD_INTEGRATIONS_UPDATE = 'GUILD_INTEGRATIONS_UPDATE';
     public const INTEGRATION_CREATE = 'INTEGRATION_CREATE';
     public const INTEGRATION_UPDATE = 'INTEGRATION_UPDATE';
@@ -120,6 +127,11 @@ abstract class Event
     public const MESSAGE_POLL_VOTE_ADD = 'MESSAGE_POLL_VOTE_ADD';
     public const MESSAGE_POLL_VOTE_REMOVE = 'MESSAGE_POLL_VOTE_REMOVE';
 
+    // Entitlements
+    public const ENTITLEMENT_CREATE = 'ENTITLEMENT_CREATE';
+    public const ENTITLEMENT_UPDATE = 'ENTITLEMENT_UPDATE';
+    public const ENTITLEMENT_DELETE = 'ENTITLEMENT_DELETE';
+
     /**
      * The Discord client instance.
      *
@@ -156,7 +168,7 @@ abstract class Event
     /**
      * Transforms the given data, and updates the Discord instance if necessary.
      *
-     * @param object $data The data that was sent with the WebSocket.
+     * @param Payload|object $data The data that was sent with the WebSocket.
      *
      * @return \Generator
      *

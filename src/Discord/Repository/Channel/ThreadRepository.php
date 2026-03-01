@@ -1,9 +1,12 @@
 <?php
 
+declare(strict_types=1);
+
 /*
  * This file is a part of the DiscordPHP project.
  *
- * Copyright (c) 2015-present David Cole <david.cole1340@gmail.com>
+ * Copyright (c) 2015-2022 David Cole <david.cole1340@gmail.com>
+ * Copyright (c) 2020-present Valithor Obsidion <valithor@discordphp.org>
  *
  * This file is subject to the MIT license that is bundled
  * with this source code in the LICENSE.md file.
@@ -11,8 +14,7 @@
 
 namespace Discord\Repository\Channel;
 
-use Discord\Helpers\Collection;
-use Discord\Helpers\CollectionInterface;
+use Discord\Helpers\ExCollectionInterface;
 use Discord\Http\Endpoint;
 use Discord\Parts\Thread\Thread;
 use Discord\Repository\AbstractRepository;
@@ -36,7 +38,7 @@ use function React\Promise\resolve;
 class ThreadRepository extends AbstractRepository
 {
     /**
-     * {@inheritDoc}
+     * @inheritDoc
      */
     protected $endpoints = [
         'all' => Endpoint::GUILD_THREADS_ACTIVE,
@@ -47,19 +49,19 @@ class ThreadRepository extends AbstractRepository
     ];
 
     /**
-     * {@inheritDoc}
+     * @inheritDoc
      */
     protected $class = Thread::class;
 
     /**
-     * {@inheritDoc}
+     * @inheritDoc
      */
     protected function cacheFreshen($response): PromiseInterface
     {
         foreach ($response->threads as $value) {
             $value = array_merge($this->vars, (array) $value);
             /** @var Thread */
-            $part = $this->factory->create($this->class, $value, true);
+            $part = $this->factory->part($this->class, $value, true);
             $items[$part->{$this->discrim}] = $part;
         }
 
@@ -72,7 +74,7 @@ class ThreadRepository extends AbstractRepository
         return $this->cache->setMultiple($items)->then(function ($success) use ($items, $members) {
             foreach ($items as $thread) {
                 foreach ($members as $member) {
-                    if ($member->id == $thread->id) {
+                    if ($member->id === $thread->id) {
                         $thread->members->cache->set($member->id, $thread->members->create((array) $member + ['guild_id' => $thread->guild_id], true));
                         break;
                     }
@@ -88,7 +90,7 @@ class ThreadRepository extends AbstractRepository
      *
      * @link https://discord.com/developers/docs/resources/channel#list-active-threads
      *
-     * @return PromiseInterface<Collection<Thread[]>>
+     * @return PromiseInterface<ExCollectionInterface<Thread[]>>
      */
     public function active(): PromiseInterface
     {
@@ -110,7 +112,7 @@ class ThreadRepository extends AbstractRepository
      *
      * @throws \InvalidArgumentException
      *
-     * @return PromiseInterface<Collection<Thread[]>>
+     * @return PromiseInterface<ExCollectionInterface<Thread[]>>
      */
     public function archived(bool $private = false, bool $joined = false, ?int $limit = null, $before = null): PromiseInterface
     {
@@ -130,11 +132,11 @@ class ThreadRepository extends AbstractRepository
 
         $endpoint = Endpoint::bind($endpoint, $this->vars['channel_id']);
 
-        if ($limit != null) {
+        if ($limit) {
             $endpoint->addQuery('limit', $limit);
         }
 
-        if ($before != null) {
+        if ($before !== null) {
             if ($before instanceof Thread) {
                 $before = $before->id;
             }
@@ -142,7 +144,7 @@ class ThreadRepository extends AbstractRepository
             $endpoint->addQuery('before', $before);
         }
 
-        return $this->http->get(Endpoint::bind($endpoint, $this->vars['channel_id']))
+        return $this->http->get(Endpoint::bind((string) $endpoint, $this->vars['channel_id']))
             ->then(fn ($response) => $this->handleThreadPaginationResponse($response));
     }
 
@@ -151,18 +153,19 @@ class ThreadRepository extends AbstractRepository
      *
      * @param object $response
      *
-     * @return CollectionInterface|Thread[]
+     * @return ExCollectionInterface<Thread>|Thread[]
      */
-    private function handleThreadPaginationResponse(object $response): CollectionInterface
+    private function handleThreadPaginationResponse(object $response): ExCollectionInterface
     {
-        $collection = Collection::for(Thread::class);
+        /** @var ExCollectionInterface<Thread> $collection */
+        $collection = $this->discord->getCollectionClass()::for(Thread::class);
 
         foreach ($response->threads as $thread) {
             /** @var Thread */
             $thread = $this->factory->part(Thread::class, (array) $thread, true);
 
             foreach ($response->members as $member) {
-                if ($member->id == $thread->id) {
+                if ($member->id === $thread->id) {
                     $thread->members->pushItem($thread->members->create($member, true));
                 }
             }

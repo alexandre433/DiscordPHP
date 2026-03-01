@@ -1,9 +1,12 @@
 <?php
 
+declare(strict_types=1);
+
 /*
  * This file is a part of the DiscordPHP project.
  *
- * Copyright (c) 2015-present David Cole <david.cole1340@gmail.com>
+ * Copyright (c) 2015-2022 David Cole <david.cole1340@gmail.com>
+ * Copyright (c) 2020-present Valithor Obsidion <valithor@discordphp.org>
  *
  * This file is subject to the MIT license that is bundled
  * with this source code in the LICENSE.md file.
@@ -27,7 +30,7 @@ use Discord\Parts\Thread\Thread;
 class MessageReactionRemove extends Event
 {
     /**
-     * {@inheritDoc}
+     * @inheritDoc
      */
     public function handle($data)
     {
@@ -55,7 +58,7 @@ class MessageReactionRemove extends Event
         if (isset($channel) && $message = yield $channel->messages->cacheGet($data->message_id)) {
             /** @var Reaction */
             if ($react = yield $message->reactions->cacheGet($reaction->reaction_id)) {
-                if ($data->user_id == $this->discord->id) {
+                if ($data->user_id === $this->discord->id) {
                     $react->me = false;
                 }
 

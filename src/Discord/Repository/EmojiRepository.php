@@ -1,9 +1,12 @@
 <?php
 
+declare(strict_types=1);
+
 /*
  * This file is a part of the DiscordPHP project.
  *
- * Copyright (c) 2015-present David Cole <david.cole1340@gmail.com>
+ * Copyright (c) 2015-2022 David Cole <david.cole1340@gmail.com>
+ * Copyright (c) 2020-present Valithor Obsidion <valithor@discordphp.org>
  *
  * This file is subject to the MIT license that is bundled
  * with this source code in the LICENSE.md file.
@@ -11,7 +14,6 @@
 
 namespace Discord\Repository;
 
-use Discord\Discord;
 use Discord\Http\Endpoint;
 use Discord\Parts\Guild\Emoji;
 use React\Promise\PromiseInterface;
@@ -35,7 +37,7 @@ use function React\Promise\resolve;
 class EmojiRepository extends AbstractRepository
 {
     /**
-     * {@inheritDoc}
+     * @inheritDoc
      */
     protected $endpoints = [
         'all' => Endpoint::APPLICATION_EMOJIS,
@@ -46,14 +48,14 @@ class EmojiRepository extends AbstractRepository
     ];
 
     /**
-     * {@inheritDoc}
+     * @inheritDoc
      */
     protected $class = Emoji::class;
 
     /**
-     * {@inheritDoc}
+     * @inheritDoc
      */
-    public function __construct(Discord $discord, array $vars = [])
+    public function __construct($discord, array $vars = [])
     {
         $vars['application_id'] = $discord->application->id;
 
@@ -67,10 +69,12 @@ class EmojiRepository extends AbstractRepository
      */
     protected function cacheFreshen($response): PromiseInterface
     {
-        foreach ($response as $value) foreach ($value as $value) {
-            $value = array_merge($this->vars, (array) $value);
-            $part = $this->factory->create($this->class, $value, true);
-            $items[$part->{$this->discrim}] = $part;
+        foreach ($response as $value) {
+            foreach ($value as $value) {
+                $value = array_merge($this->vars, (array) $value);
+                $part = $this->factory->part($this->class, $value, true);
+                $items[$part->{$this->discrim}] = $part;
+            }
         }
 
         if (empty($items)) {

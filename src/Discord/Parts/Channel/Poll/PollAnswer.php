@@ -1,9 +1,12 @@
 <?php
 
+declare(strict_types=1);
+
 /*
  * This file is a part of the DiscordPHP project.
  *
- * Copyright (c) 2015-present David Cole <david.cole1340@gmail.com>
+ * Copyright (c) 2015-2022 David Cole <david.cole1340@gmail.com>
+ * Copyright (c) 2020-present Valithor Obsidion <valithor@discordphp.org>
  *
  * This file is subject to the MIT license that is bundled
  * with this source code in the LICENSE.md file.
@@ -11,7 +14,6 @@
 
 namespace Discord\Parts\Channel\Poll;
 
-use Discord\Helpers\Collection;
 use Discord\Http\Endpoint;
 use Discord\Parts\Channel\Channel;
 use Discord\Parts\Channel\Message;
@@ -31,8 +33,8 @@ use function Discord\normalizePartId;
  *
  * @since 10.0.0
  *
- * @property int        $answer_id   The ID of the answer. Only sent as part of responses from Discord's API/Gateway.
- * @property PollMedia  $poll_media  The data of the answer
+ * @property int       $answer_id  The ID of the answer. Only sent as part of responses from Discord's API/Gateway.
+ * @property PollMedia $poll_media The data of the answer
  *
  * @property      string         $user_id    The user ID that voted for the answer.
  * @property-read User           $user       The user that voted for the answer.
@@ -46,7 +48,7 @@ use function Discord\normalizePartId;
 class PollAnswer extends Part
 {
     /**
-     * {@inheritdoc}
+     * @inheritdoc
      */
     protected $fillable = [
         'answer_id',
@@ -90,8 +92,7 @@ class PollAnswer extends Part
             }
         }
 
-        // @todo potentially slow
-        if ($channel = $this->discord->getChannel($this->channel_id)) {
+        if ($channel = $this->discord->private_channels->get('id', $this->channel_id)) {
             return $channel;
         }
 
@@ -140,7 +141,7 @@ class PollAnswer extends Part
      *
      * @throws \OutOfRangeException
      *
-     * @return PromiseInterface<Collection|User[]>
+     * @return PromiseInterface<ExCollectionInterface<User>|User[]>
      */
     public function getVoters(array $options = []): PromiseInterface
     {
@@ -162,7 +163,8 @@ class PollAnswer extends Part
 
         return $this->http->get($query)
             ->then(function ($response) {
-                $users = Collection::for(User::class);
+                /** @var ExCollectionInterface<User> $users */
+                $users = $this->discord->getCollectionClass()::for(User::class);
 
                 foreach ($response->users ?? [] as $user) {
                     if (! $part = $this->discord->users->get('id', $user->id)) {

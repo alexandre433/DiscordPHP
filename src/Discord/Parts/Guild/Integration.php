@@ -1,9 +1,12 @@
 <?php
 
+declare(strict_types=1);
+
 /*
  * This file is a part of the DiscordPHP project.
  *
- * Copyright (c) 2015-present David Cole <david.cole1340@gmail.com>
+ * Copyright (c) 2015-2022 David Cole <david.cole1340@gmail.com>
+ * Copyright (c) 2020-present Valithor Obsidion <valithor@discordphp.org>
  *
  * This file is subject to the MIT license that is bundled
  * with this source code in the LICENSE.md file.
@@ -15,6 +18,8 @@ use Carbon\Carbon;
 use Discord\Parts\OAuth\Application;
 use Discord\Parts\Part;
 use Discord\Parts\User\User;
+use Discord\Repository\Guild\IntegrationRepository;
+use React\Promise\PromiseInterface;
 
 /**
  * An Integration is a guild integrations for Twitch, YouTube, Bot and Apps.
@@ -34,7 +39,7 @@ use Discord\Parts\User\User;
  * @property      int|null         $expire_behavior     The behavior of expiring subscribers.
  * @property      int|null         $expire_grace_period The grace period (in days) before expiring subscribers.
  * @property      User|null        $user                User for this integration.
- * @property      object           $account             Integration account information.
+ * @property      Account          $account             Integration account information.
  * @property      Carbon|null      $synced_at           When this integration was last synced.
  * @property      int|null         $subscriber_count    How many subscribers this integration has.
  * @property      bool|null        $revoked             Has this integration been revoked.
@@ -47,7 +52,7 @@ use Discord\Parts\User\User;
 class Integration extends Part
 {
     /**
-     * {@inheritDoc}
+     * @inheritDoc
      */
     protected $fillable = [
         'id',
@@ -86,7 +91,17 @@ class Integration extends Part
             return $user;
         }
 
-        return $this->factory->part(User::class, (array) $this->attributes['user'], true);
+        return $this->attributePartHelper('user', User::class);
+    }
+
+    /**
+     * Returns the account attribute.
+     *
+     * @return Account The account attribute.
+     */
+    protected function getAccountAttribute(): Account
+    {
+        return $this->attributePartHelper('account', Account::class);
     }
 
     /**
@@ -98,11 +113,7 @@ class Integration extends Part
      */
     protected function getSyncedAtAttribute(): ?Carbon
     {
-        if (! isset($this->attributes['synced_at'])) {
-            return null;
-        }
-
-        return new Carbon($this->attributes['synced_at']);
+        return $this->attributeCarbonHelper('synced_at');
     }
 
     /**
@@ -120,11 +131,11 @@ class Integration extends Part
 
         $botApplication = $this->discord->application;
 
-        if ($this->attributes['application']->id == $botApplication->id) {
+        if ($this->attributes['application']->id === $botApplication->id) {
             return $botApplication;
         }
 
-        return $this->factory->part(Application::class, (array) $this->attributes['application'], true);
+        return $this->attributePartHelper('application', Application::class);
     }
 
     /**
@@ -152,7 +163,40 @@ class Integration extends Part
     }
 
     /**
-     * {@inheritDoc}
+     * Gets the originating repository of the part.
+     *
+     * @since 10.42.0
+     *
+     * @throws \Exception If the part does not have an originating repository.
+     *
+     * @return IntegrationRepository|null The repository, or null if required part data is missing.
+     */
+    public function getRepository(): IntegrationRepository|null
+    {
+        if (! isset($this->attributes['guild_id'])) {
+            return null;
+        }
+        
+        /** @var Guild $guild */
+        $guild = $this->guild ?? $this->factory->part(Guild::class, ['id' => $this->attributes['guild_id']], true);
+
+        return $guild->integrations;
+    }
+
+    /**
+     * @inheritDoc
+     */
+    public function save(?string $reason = null): PromiseInterface
+    {
+        if (isset($this->attributes['guild_id'])) {
+            return $this->getRepository()->save($this, $reason);
+        }
+
+        return parent::save();
+    }
+
+    /**
+     * @inheritDoc
      */
     public function getRepositoryAttributes(): array
     {

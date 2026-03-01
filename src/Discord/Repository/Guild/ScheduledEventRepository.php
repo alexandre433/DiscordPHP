@@ -1,9 +1,12 @@
 <?php
 
+declare(strict_types=1);
+
 /*
  * This file is a part of the DiscordPHP project.
  *
- * Copyright (c) 2015-present David Cole <david.cole1340@gmail.com>
+ * Copyright (c) 2015-2022 David Cole <david.cole1340@gmail.com>
+ * Copyright (c) 2020-present Valithor Obsidion <valithor@discordphp.org>
  *
  * This file is subject to the MIT license that is bundled
  * with this source code in the LICENSE.md file.
@@ -35,7 +38,7 @@ use function React\Promise\resolve;
 class ScheduledEventRepository extends AbstractRepository
 {
     /**
-     * {@inheritDoc}
+     * @inheritDoc
      */
     protected $endpoints = [
         'all' => Endpoint::GUILD_SCHEDULED_EVENTS,
@@ -46,12 +49,12 @@ class ScheduledEventRepository extends AbstractRepository
     ];
 
     /**
-     * {@inheritDoc}
+     * @inheritDoc
      */
     protected $class = ScheduledEvent::class;
 
     /**
-     * {@inheritDoc}
+     * @inheritDoc
      *
      * @param bool $with_user_count Whether to include number of users subscribed to each event
      *

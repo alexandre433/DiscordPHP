@@ -1,9 +1,12 @@
 <?php
 
+declare(strict_types=1);
+
 /*
  * This file is a part of the DiscordPHP project.
  *
- * Copyright (c) 2015-present David Cole <david.cole1340@gmail.com>
+ * Copyright (c) 2015-2022 David Cole <david.cole1340@gmail.com>
+ * Copyright (c) 2020-present Valithor Obsidion <valithor@discordphp.org>
  *
  * This file is subject to the MIT license that is bundled
  * with this source code in the LICENSE.md file.
@@ -12,9 +15,9 @@
 namespace Discord\Parts\Guild;
 
 use Carbon\Carbon;
+use Discord\Builders\ChannelBuilder;
 use Discord\Exceptions\FileNotFoundException;
-use Discord\Helpers\Collection;
-use Discord\Helpers\CollectionInterface;
+use Discord\Helpers\ExCollectionInterface;
 use Discord\Helpers\Multipart;
 use Discord\Http\Endpoint;
 use Discord\Http\Exceptions\NoPermissionsException;
@@ -24,6 +27,7 @@ use Discord\Parts\Channel\StageInstance;
 use Discord\Parts\Part;
 use Discord\Parts\User\Member;
 use Discord\Parts\User\User;
+use Discord\Repository\Guild\AuditLogRepository;
 use Discord\Repository\Guild\BanRepository;
 use Discord\Repository\Guild\ChannelRepository;
 use Discord\Repository\Guild\EmojiRepository;
@@ -33,6 +37,7 @@ use Discord\Repository\Guild\RoleRepository;
 use Discord\Parts\Guild\AuditLog\AuditLog;
 use Discord\Parts\Guild\AuditLog\Entry;
 use Discord\Parts\Permissions\RolePermission;
+use Discord\Parts\WebSockets\VoiceStateUpdate;
 use Discord\Repository\Guild\AutoModerationRuleRepository;
 use Discord\Repository\Guild\CommandPermissionsRepository;
 use Discord\Repository\Guild\GuildCommandRepository;
@@ -41,6 +46,10 @@ use Discord\Repository\Guild\StickerRepository;
 use Discord\Repository\Guild\ScheduledEventRepository;
 use Discord\Repository\Guild\GuildTemplateRepository;
 use Discord\Repository\Guild\IntegrationRepository;
+use Discord\Repository\Guild\MessageRepository;
+use Discord\Repository\GuildRepository;
+use Discord\Repository\VoiceStateRepository;
+use Discord\Voice\Region;
 use React\Promise\PromiseInterface;
 use ReflectionClass;
 use Symfony\Component\OptionsResolver\OptionsResolver;
@@ -59,170 +68,214 @@ use function React\Promise\resolve;
  * @since 2.0.0 Refactored as Part
  * @since 1.0.0
  *
- * @property      string             $id                                                The unique identifier of the guild.
- * @property      string             $name                                              The name of the guild.
- * @property      ?string            $icon                                              The URL to the guild icon.
- * @property      ?string|null       $icon_hash                                         The icon hash for the guild.
- * @property      ?string            $splash                                            The URL to the guild splash.
- * @property      ?string|null       $splash_hash                                       The splash hash for the guild.
- * @property      ?string            $discovery_splash                                  Discovery splash hash. Only for discoverable guilds.
- * @property      string             $owner_id                                          The unique identifier of the owner of the guild.
- * @property-read User|null          $owner                                             The owner of the guild.
- * @property      string             $afk_channel_id                                    The unique identifier of the AFK channel ID.
- * @property      int                $afk_timeout                                       How long in seconds you will remain in the voice channel until you are moved into the AFK channel. Can be set to: 60, 300, 900, 1800, 3600.
- * @property      bool|null          $widget_enabled                                    Is server widget enabled.
- * @property      ?string|null       $widget_channel_id                                 Channel that the widget will create an invite to.
- * @property      int                $verification_level                                The verification level used for the guild.
- * @property      int                $default_message_notifications                     Default notification level.
- * @property      int                $explicit_content_filter                           Explicit content filter level.
- * @property      RoleRepository     $roles                                             Roles in the guild.
- * @property      EmojiRepository    $emojis                                            Custom guild emojis.
- * @property      string[]           $features                                          An array of features that the guild has.
- * @property-read bool               $feature_animated_banner                           Guild has access to set an animated guild banner image.
- * @property-read bool               $feature_animated_icon                             Guild has access to set an animated guild icon.
- * @property-read bool               $feature_application_command_permissions_v2        Guild is using the old permissions configuration behavior.
- * @property-read bool               $feature_auto_moderation                           Guild has set up auto moderation rules.
- * @property-read bool               $feature_banner                                    Guild has access to set a guild banner image.
- * @property-read bool               $feature_community                                 Guild can enable welcome screen, Membership Screening, stage channels and discovery, and receives community updates.
- * @property-read bool               $feature_creator_monetizable_provisional           Guild has enabled monetization.
- * @property-read bool               $feature_creator_store_page                        Guild has enabled the role subscription promo page.
- * @property-read bool               $feature_developer_support_server                  Guild has been set as a support server on the App Directory.
- * @property-read bool               $feature_discoverable                              Guild is able to be discovered in the directory.
- * @property-read bool               $feature_featurable                                Guild is able to be featured in the directory.
- * @property-read bool               $feature_has_directory_entry                       Guild is listed in a directory channel.
- * @property-read bool               $feature_invites_disabled                          Guild has paused invites, preventing new users from joining.
- * @property-read bool               $feature_invite_splash                             Guild has access to set an invite splash background.
- * @property-read bool               $feature_linked_to_hub                             Guild is in a Student Hub.
- * @property-read bool               $feature_member_verification_gate_enabled          Guild has enabled membership screening.
- * @property-read bool               $feature_monetization_enabled                      Guild has enabled monetization.
- * @property-read bool               $feature_more_stickers                             Guild has increased custom sticker slots.
- * @property-read bool               $feature_news                                      Guild has access to create news channels.
- * @property-read bool               $feature_partnered                                 Guild is partnered.
- * @property-read bool               $feature_preview_enabled                           Guild can be previewed before joining via membership screening or the directory.
- * @property-read bool               $feature_private_threads                           Guild has access to create private threads.
- * @property-read bool               $feature_raid_alerts_enabled                       Guild has enabled alerts for join raids in the configured safety alerts channel.
- * @property-read bool               $feature_role_icons                                Guild is able to set role icons.
- * @property-read bool               $feature_role_subscriptions_available_for_purchase Guild has role subscriptions that can be purchased.
- * @property-read bool               $feature_role_subscriptions_enabled                Guild has enabled role subscriptions.
- * @property-read bool               $feature_ticketed_events_enabled                   Guild has enabled ticketed events.
- * @property-read bool               $feature_vanity_url                                Guild has access to set a vanity url.
- * @property-read bool               $feature_verified                                  Guild is verified.
- * @property-read bool               $feature_vip_regions                               Guild has access to set 384kbps bitrate in voice.
- * @property-read bool               $feature_welcome_screen_enabled                    Guild has enabled the welcome screen.
- * @property      int                $mfa_level                                         MFA level required to join.
- * @property      ?string            $application_id                                    Application that made the guild, if made by one.
- * @property      ?string            $system_channel_id                                 Channel that system notifications are posted in.
- * @property      int                $system_channel_flags                              Flags for the system channel.
- * @property      ?string            $rules_channel_id                                  Channel that the rules are in.
- * @property      int|null           $max_presences                                     Maximum amount of presences allowed in the guild.
- * @property      int|null           $max_members                                       Maximum amount of members allowed in the guild.
- * @property      ?string            $vanity_url_code                                   Vanity URL code for the guild.
- * @property      ?string            $description                                       Guild description of a guild.
- * @property      ?string            $banner                                            Banner hash.
- * @property      int                $premium_tier                                      Server boost level.
- * @property      int|null           $premium_subscription_count                        Number of boosts in the guild.
- * @property      string             $preferred_locale                                  Preferred locale of the guild.
- * @property      ?string            $public_updates_channel_id                         Notice channel id.
- * @property      int|null           $max_video_channel_users                           Maximum amount of users allowed in a video channel.
- * @property      int|null           $max_stage_video_channel_users                     Maximum amount of users in a stage video channel.
- * @property      int|null           $approximate_member_count                          Approximate number of members in this guild, returned from the GET /guilds/<id> endpoint when with_counts is true.
- * @property      int|null           $approximate_presence_count                        Approximate number of non-offline members in this guild, returned from the GET /guilds/<id> endpoint when with_counts is true.
- * @property-read WelcomeScreen|null $welcome_screen                                    The welcome screen of a Community guild, shown to new members, returned in an Invite's guild object. use `getWelcomeScreen` first to populate.
- * @property      int                $nsfw_level                                        The guild NSFW level.
- * @property      StickerRepository  $stickers                                          Custom guild stickers.
- * @property      bool               $premium_progress_bar_enabled                      Whether the guild has the boost progress bar enabled.
- * @property      string|null        $safety_alerts_channel_id                          The id of the channel where admins and moderators of Community guilds receive safety alerts from Discord.
+ * @property      string              $id                            The unique identifier of the guild.
+ * @property      string              $name                          The name of the guild.
+ * @property      ?string|null        $icon                          The URL to the guild icon.
+ * @property      ?string|null        $icon_hash                     The icon hash for the guild.
+ * @property      ?string|null        $splash                        The URL to the guild splash.
+ * @property      ?string|null        $splash_hash                   The splash hash for the guild.
+ * @property      ?string|null        $discovery_splash              Discovery splash hash. Only for discoverable guilds.
+ * @property-read User|null           $owner                         The owner of the guild.
+ * @property      string              $owner_id                      The unique identifier of the owner of the guild.
+ * @property      string              $permissions                   Total permissions for the user in the guild (excludes overwrites and implicit permissions).
+ * @property      ?string|null        $region                        Voice region id for the guild (deprecated).
+ * @property      string              $afk_channel_id                The unique identifier of the AFK channel ID.
+ * @property      int                 $afk_timeout                   How long in seconds you will remain in the voice channel until you are moved into the AFK channel. Can be set to: 60, 300, 900, 1800, 3600.
+ * @property      bool|null           $widget_enabled                Is server widget enabled.
+ * @property      ?string|null        $widget_channel_id             Channel that the widget will create an invite to.
+ * @property      int                 $verification_level            The verification level used for the guild.
+ * @property      int                 $default_message_notifications Default notification level.
+ * @property      int                 $explicit_content_filter       Explicit content filter level.
+ * @property      string[]            $features                      An array of features that the guild has.
+ * @property      int                 $mfa_level                     MFA level required to join.
+ * @property      ?string|null        $application_id                Application that made the guild, if made by one.
+ * @property      ?string|null        $system_channel_id             Channel that system notifications are posted in.
+ * @property      int                 $system_channel_flags          Flags for the system channel.
+ * @property      ?string|null        $rules_channel_id              Channel that the rules are in.
+ * @property      int|null            $max_presences                 Maximum amount of presences allowed in the guild.
+ * @property      int|null            $max_members                   Maximum amount of members allowed in the guild.
+ * @property      ?string|null        $vanity_url_code               Vanity URL code for the guild.
+ * @property      ?string|null        $description                   Guild description of a guild.
+ * @property      ?string|null        $banner                        Banner hash.
+ * @property      int                 $premium_tier                  Server boost level.
+ * @property      int|null            $premium_subscription_count    Number of boosts in the guild.
+ * @property      string              $preferred_locale              Preferred locale of the guild.
+ * @property      ?string|null        $public_updates_channel_id     Notice channel id.
+ * @property      int|null            $max_video_channel_users       Maximum amount of users allowed in a video channel.
+ * @property      int|null            $max_stage_video_channel_users Maximum amount of users in a stage video channel.
+ * @property      int|null            $approximate_member_count      Approximate number of members in this guild, returned from the GET /guilds/<id> endpoint when with_counts is true.
+ * @property      int|null            $approximate_presence_count    Approximate number of non-offline members in this guild, returned from the GET /guilds/<id> endpoint when with_counts is true.
+ * @property-read WelcomeScreen|null  $welcome_screen                The welcome screen of a Community guild, shown to new members, returned in an Invite's guild object. use `getWelcomeScreen` first to populate.
+ * @property      int                 $nsfw_level                    The guild NSFW level.
+ * @property      StickerRepository   $stickers                      Custom guild stickers.
+ * @property      bool                $premium_progress_bar_enabled  Whether the guild has the boost progress bar enabled.
+ * @property      ?string|null        $safety_alerts_channel_id      The id of the channel where admins and moderators of Community guilds receive safety alerts from Discord.
+ * @property      ?IncidentsData|null $incidents_data                The incidents data for this guild.
+ *
+ * @property-read bool $feature_animated_banner                           Guild has access to set an animated guild banner image.
+ * @property-read bool $feature_animated_icon                             Guild has access to set an animated guild icon.
+ * @property-read bool $feature_application_command_permissions_v2        Guild is using the old permissions configuration behavior.
+ * @property-read bool $feature_auto_moderation                           Guild has set up auto moderation rules.
+ * @property-read bool $feature_banner                                    Guild has access to set a guild banner image.
+ * @property-read bool $feature_community                                 Guild can enable welcome screen, Membership Screening, stage channels and discovery, and receives community updates.
+ * @property-read bool $feature_creator_monetizable_provisional           Guild has enabled monetization.
+ * @property-read bool $feature_creator_store_page                        Guild has enabled the role subscription promo page.
+ * @property-read bool $feature_developer_support_server                  Guild has been set as a support server on the App Directory.
+ * @property-read bool $feature_discoverable                              Guild is able to be discovered in the directory.
+ * @property-read bool $feature_featurable                                Guild is able to be featured in the directory.
+ * @property-read bool $feature_invites_disabled                          Guild has paused invites, preventing new users from joining.
+ * @property-read bool $feature_invite_splash                             Guild has access to set an invite splash background.
+ * @property-read bool $feature_member_verification_gate_enabled          Guild has enabled membership screening.
+ * @property-read bool $feature_monetization_enabled                      Guild has enabled monetization.
+ * @property-read bool $feature_more_soundboard                           Guild has increased custom soundboard sound slots.
+ * @property-read bool $feature_more_stickers                             Guild has increased custom sticker slots.
+ * @property-read bool $feature_news                                      Guild has access to create announcement channels.
+ * @property-read bool $feature_partnered                                 Guild is partnered.
+ * @property-read bool $feature_preview_enabled                           Guild can be previewed before joining via membership screening or the directory.
+ * @property-read bool $feature_raid_alerts_disabled                      Guild has disabled alerts for join raids in the configured safety alerts channel.
+ * @property-read bool $feature_role_icons                                Guild is able to set role icons.
+ * @property-read bool $feature_role_subscriptions_available_for_purchase Guild has role subscriptions that can be purchased.
+ * @property-read bool $feature_role_subscriptions_enabled                Guild has enabled role subscriptions.
+ * @property-read bool $feature_soundboard                                Guild has created soundboard sounds.
+ * @property-read bool $feature_ticketed_events_enabled                   Guild has enabled ticketed events.
+ * @property-read bool $feature_vanity_url                                Guild has access to set a vanity url.
+ * @property-read bool $feature_verified                                  Guild is verified.
+ * @property-read bool $feature_vip_regions                               Guild has access to set 384kbps bitrate in voice.
+ * @property-read bool $feature_welcome_screen_enabled                    Guild has enabled the welcome screen.
+ * @property-read bool $feature_guests_enabled                            Guild has access to guest invites.
+ * @property-read bool $feature_guild_tags                                Guild access to set guild tags.
+ * @property-read bool $feature_enhanced_role_colors                      Guild is able to set gradient colors to roles.
  *
  * @property Carbon|null              $joined_at              A timestamp of when the current user joined the guild.
  * @property bool|null                $large                  Whether the guild is considered 'large' (over 250 members).
  * @property int|null                 $member_count           How many members are in the guild.
  * @property MemberRepository         $members                Users in the guild.
  * @property ChannelRepository        $channels               Channels in the guild.
- * @property ScheduledeventRepository $guild_scheduled_events The scheduled events in the guild.
+ * @property ScheduledEventRepository $guild_scheduled_events The scheduled events in the guild.
  *
+ * @property AuditLogRepository           $audit_log
  * @property AutoModerationRuleRepository $auto_moderation_rules
  * @property BanRepository                $bans
  * @property GuildCommandRepository       $commands
  * @property CommandPermissionsRepository $command_permissions
+ * @property EmojiRepository              $emojis
  * @property IntegrationRepository        $integrations
  * @property InviteRepository             $invites
+ * @property MessageRepository            $messages
+ * @property RoleRepository               $roles
  * @property SoundRepository              $sounds
  * @property GuildTemplateRepository      $templates
+ * @property VoiceStateRepository         $voice_states
  */
 class Guild extends Part
 {
+    use GuildTrait;
+
     public const REGION_DEFAULT = 'us_west';
 
+    /** Members will receive notifications for all messages by default. */
     public const NOTIFICATION_ALL_MESSAGES = 0;
+    /** Members will receive notifications only for messages that @mention them by default. */
     public const NOTIFICATION_ONLY_MENTIONS = 1;
 
+    /** Media content will not be scanned. */
     public const EXPLICIT_CONTENT_FILTER_DISABLED = 0;
+    /** Media content sent by members without roles will be scanned. */
     public const EXPLICIT_CONTENT_FILTER_MEMBERS_WITHOUT_ROLES = 1;
+    /** Media content sent by all members will be scanned. */
     public const EXPLICIT_CONTENT_FILTER_ALL_MEMBERS = 2;
 
+    /** Guild has no MFA/2FA requirement for moderation actions. */
     public const MFA_NONE = 0;
+    /** Guild has a 2FA requirement for moderation actions. */
     public const MFA_ELEVATED = 1;
 
+    /** Unrestricted. */
+    public const LEVEL_NONE = 0;
+    /** @deprecated 10.36.32 use `GUILD::LEVEL_NONE` */
     public const LEVEL_OFF = 0;
+    /** Must have verified email on account. */
     public const LEVEL_LOW = 1;
+    /** Must be registered on Discord for longer than 5 minutes. */
     public const LEVEL_MEDIUM = 2;
-    public const LEVEL_TABLEFLIP = 3;
-    public const LEVEL_DOUBLE_TABLEFLIP = 4;
+    /** Must be a member of the server for longer than 10 minutes. */
+    public const LEVEL_HIGH = 3;
+    /** @deprecated 10.36.32 use `GUILD::LEVEL_HIGH` */
+    public const LEVEL_TABLEFLIP = self::LEVEL_HIGH;
+    /** Must have a verified phone number. */
+    public const LEVEL_VERY_HIGH = 4;
+    /** @deprecated 10.36.32 use `GUILD::LEVEL_VERY_HIGH` */
+    public const LEVEL_DOUBLE_TABLEFLIP = self::LEVEL_VERY_HIGH;
 
     public const NSFW_DEFAULT = 0;
     public const NSFW_EXPLICIT = 1;
     public const NSFW_SAFE = 2;
     public const NSFW_AGE_RESTRICTED = 3;
 
+    /** Guild has not unlocked any Server Boost perks. */
     public const PREMIUM_NONE = 0;
+    /** Guild has unlocked Server Boost level 1 perks. */
     public const PREMIUM_TIER_1 = 1;
+    /** Guild has unlocked Server Boost level 2 perks. */
     public const PREMIUM_TIER_2 = 2;
+    /** Guild has unlocked Server Boost level 3 perks. */
     public const PREMIUM_TIER_3 = 3;
 
+    /** Suppress member join notifications. */
     public const SUPPRESS_JOIN_NOTIFICATIONS = (1 << 0);
+    /** Suppress server boost notifications. */
     public const SUPPRESS_PREMIUM_SUBSCRIPTION = (1 << 1);
+    /** Suppress server setup tips. */
     public const SUPPRESS_GUILD_REMINDER_NOTIFICATIONS = (1 << 2);
+    /** Hide member join sticker reply buttons. */
     public const SUPPRESS_JOIN_NOTIFICATION_REPLIES = (1 << 3);
+    /** Suppress role subscription purchase and renewal notifications. */
     public const SUPPRESS_ROLE_SUBSCRIPTION_PURCHASE_NOTIFICATIONS = (1 << 4);
+    /** Hide role subscription sticker reply buttons. */
     public const SUPPRESS_ROLE_SUBSCRIPTION_PURCHASE_NOTIFICATION_REPLIES = (1 << 5);
+    /** Suppress emoji added notifications. */
+    public const SUPPRESS_UGC_ADDED_NOTIFICATIONS = (1 << 8);
 
     public const HUB_TYPE_DEFAULT = 0;
     public const HUB_TYPE_HIGH_SCHOOL = 1;
     public const HUB_TYPE_COLLEGE = 2;
 
     /**
-     * {@inheritDoc}
+     * @inheritDoc
      */
     protected $fillable = [
         'id',
         'name',
         'icon',
         'icon_hash',
-        'description',
         'splash',
         'discovery_splash',
-        'features',
-        'banner',
+        'owner',
         'owner_id',
-        'application_id',
+        'permissions',
+        'region',
         'afk_channel_id',
         'afk_timeout',
-        'system_channel_id',
         'widget_enabled',
         'widget_channel_id',
         'verification_level',
         'default_message_notifications',
-        'hub_type',
-        'mfa_level',
         'explicit_content_filter',
+        'roles',
+        'features',
+        'mfa_level',
+        'application_id',
+        'system_channel_id',
+        'system_channel_flags',
+        'rules_channel_id',
         'max_presences',
         'max_members',
         'vanity_url_code',
+        'description',
+        'banner',
         'premium_tier',
         'premium_subscription_count',
-        'system_channel_flags',
         'preferred_locale',
-        'rules_channel_id',
         'public_updates_channel_id',
         'max_video_channel_users',
         'max_stage_video_channel_users',
@@ -230,8 +283,10 @@ class Guild extends Part
         'approximate_presence_count',
         'welcome_screen',
         'nsfw_level',
+        'stickers',
         'premium_progress_bar_enabled',
         'safety_alerts_channel_id',
+        'incidents_data',
 
         // events
         'joined_at',
@@ -240,13 +295,15 @@ class Guild extends Part
 
         // repositories
         'channels',
-        'roles',
         'emojis',
-        'stickers',
+        'voice_states',
+
+        // undocumented
+        'hub_type',
     ];
 
     /**
-     * {@inheritDoc}
+     * @inheritDoc
      */
     protected $visible = [
         'feature_animated_banner',
@@ -260,30 +317,31 @@ class Guild extends Part
         'feature_developer_support_server',
         'feature_discoverable',
         'feature_featurable',
-        'feature_has_directory_entry',
         'feature_invites_disabled',
         'feature_invite_splash',
-        'feature_linked_to_hub',
         'feature_member_verification_gate_enabled',
-        'feature_monetization_enabled',
+        'feature_more_soundboard',
         'feature_more_stickers',
         'feature_news',
         'feature_partnered',
         'feature_preview_enabled',
-        'feature_private_threads',
-        'feature_raid_alerts_enabled',
+        'feature_raid_alerts_disabled',
         'feature_role_icons',
         'feature_role_subscriptions_available_for_purchase',
         'feature_role_subscriptions_enabled',
+        'feature_soundboard',
         'feature_ticketed_events_enabled',
         'feature_vanity_url',
         'feature_verified',
         'feature_vip_regions',
         'feature_welcome_screen_enabled',
+        'feature_guests_enabled',
+        'feature_guild_tags',
+        'feature_enhanced_role_colors',
     ];
 
     /**
-     * {@inheritDoc}
+     * @inheritDoc
      */
     protected $repositories = [
         'roles' => RoleRepository::class,
@@ -293,25 +351,59 @@ class Guild extends Part
         'channels' => ChannelRepository::class,
         'guild_scheduled_events' => ScheduledEventRepository::class,
 
+        'audit_log' => AuditLogRepository::class,
         'auto_moderation_rules' => AutoModerationRuleRepository::class,
         'bans' => BanRepository::class,
         'commands' => GuildCommandRepository::class,
         'command_permissions' => CommandPermissionsRepository::class,
         'integrations' => IntegrationRepository::class,
         'invites' => InviteRepository::class,
+        'messages' => MessageRepository::class,
         'sounds' => SoundRepository::class,
         'templates' => GuildTemplateRepository::class,
+        'voice_states' => VoiceStateRepository::class,
     ];
 
     /**
-     * An array of valid regions.
+     * Attempts to save a channel to the Discord servers.
      *
-     * @var CollectionInterface|null
+     * @link https://discord.com/developers/docs/resources/guild#create-guild-channel
+     *
+     * @since 10.25.2
+     *
+     * @param Channel|ChannelBuilder|string $channel The Channel builder that should be converted into a channel, or the name of the channel.
+     * @param string|null                   $reason  Reason for Audit Log.
+     *
+     * @return PromiseInterface<Channel>
      */
-    protected $regions;
+    public function createChannel($channel, ?string $reason = null): PromiseInterface
+    {
+        return $this->channels->createChannel($this->id, $channel, $reason);
+    }
 
     /**
-     * {@inheritDoc}
+     * Modifies the current member (no validation).
+     *
+     * @link https://discord.com/developers/docs/resources/guild#modify-current-member-json-params
+     *
+     * @since 10.30.0
+     *
+     * @param array        $params           The parameters to modify.
+     * @param ?string|null $params['nick']   Value to set user's nickname to.
+     * @param ?string|null $params['banner'] Data URI base64 encoded banner image.
+     * @param ?string|null $params['avatar'] Data URL base64 encoded avatar image.
+     * @param ?string|null $params['bio']    Guild member bio.
+     * @param string|null  $reason           Reason for Audit Log.
+     *
+     * @return PromiseInterface<self>
+     */
+    public function modifyCurrentMember(array $params, ?string $reason = null): PromiseInterface
+    {
+        return $this->members->modifyCurrentMember($this->id, $params, $reason);
+    }
+
+    /**
+     * @inheritDoc
      */
     protected function setChannelsAttribute(?array $channels): void
     {
@@ -336,18 +428,18 @@ class Guild extends Part
     /**
      * Sets the roles attribute.
      *
-     * @param CollectionInterface|array|null $roles
+     * @param ExCollectionInterface<Role>|Role[]|null $roles
      */
     protected function setRolesAttribute($roles): void
     {
-        if ($roles instanceof CollectionInterface) {
-            $roles = $roles->toArray();
+        if ($roles instanceof ExCollectionInterface) {
+            $roles = $roles->jsonSerialize();
         }
         if ($roles === null) {
             $roles = [];
         }
         if (! is_array($roles)) {
-            throw new \InvalidArgumentException('Roles must be an array or CollectionInterface.');
+            throw new \InvalidArgumentException('Roles must be an array or ExCollectionInterface.');
         }
 
         $rolesDiscrim = $this->roles->discrim;
@@ -428,23 +520,37 @@ class Guild extends Part
     }
 
     /**
+     * Returns the incidents data attribute.
+     *
+     * @link https://discord.com/developers/docs/resources/guild#incidents-data-object
+     *
+     * @return IncidentsData|null
+     */
+    protected function getIncidentsDataAttribute(): ?IncidentsData
+    {
+        return $this->attributePartHelper('incidents_data', IncidentsData::class);
+    }
+
+    /**
      * Returns the channels invites.
      *
      * @link https://discord.com/developers/docs/resources/guild#get-guild-invites
      *
      * @throws NoPermissionsException Missing manage_guild permission.
      *
-     * @return PromiseInterface<Collection|Invite[]>
+     * @return PromiseInterface<ExCollectionInterface<Invite>|Invite[]>
      */
     public function getInvites(): PromiseInterface
     {
-        $botperms = $this->getBotPermissions();
-        if ($botperms && ! $botperms->manage_guild) {
-            return reject(new NoPermissionsException("You do not have permission to get invites in the guild {$this->id}."));
+        if ($botperms = $this->getBotPermissions()) {
+            if (! $botperms->manage_guild) {
+                return reject(new NoPermissionsException("You do not have permission to get invites in the guild {$this->id}."));
+            }
         }
 
         return $this->http->get(Endpoint::bind(Endpoint::GUILD_INVITES, $this->id))->then(function ($response) {
-            $invites = Collection::for(Invite::class, 'code');
+            /** @var ExCollectionInterface<Invite> $invites */
+            $invites = $this->discord->getCollectionClass()::for(Invite::class, 'code');
 
             foreach ($response as $invite) {
                 $invite = $this->factory->part(Invite::class, (array) $invite, true);
@@ -468,9 +574,10 @@ class Guild extends Part
      */
     public function unban($user): PromiseInterface
     {
-        $botperms = $this->getBotPermissions();
-        if ($botperms && ! $botperms->ban_members) {
-            return reject(new NoPermissionsException("You do not have permission to ban members in the guild {$this->id}."));
+        if ($botperms = $this->getBotPermissions()) {
+            if (! $botperms->ban_members) {
+                return reject(new NoPermissionsException("You do not have permission to ban members in the guild {$this->id}."));
+            }
         }
 
         return $this->bans->unban($user);
@@ -495,83 +602,7 @@ class Guild extends Part
      */
     protected function getJoinedAtAttribute(): ?Carbon
     {
-        if (! isset($this->attributes['joined_at'])) {
-            return null;
-        }
-
-        return new Carbon($this->attributes['joined_at']);
-    }
-
-    /**
-     * Returns the guilds icon.
-     *
-     * @param string|null $format The image format.
-     * @param int         $size   The size of the image.
-     *
-     * @return string|null The URL to the guild icon or null.
-     */
-    public function getIconAttribute(?string $format = null, int $size = 1024): ?string
-    {
-        if (! isset($this->attributes['icon'])) {
-            return null;
-        }
-
-        if (isset($format)) {
-            $allowed = ['png', 'jpg', 'webp', 'gif'];
-
-            if (! in_array(strtolower($format), $allowed)) {
-                $format = 'webp';
-            }
-        } elseif (strpos($this->attributes['icon'], 'a_') === 0) {
-            $format = 'gif';
-        } else {
-            $format = 'webp';
-        }
-
-        return "https://cdn.discordapp.com/icons/{$this->id}/{$this->attributes['icon']}.{$format}?size={$size}";
-    }
-
-    /**
-     * Returns the guild icon hash.
-     *
-     * @return string|null The guild icon hash or null.
-     */
-    protected function getIconHashAttribute(): ?string
-    {
-        return $this->attributes['icon_hash'] ?? $this->attributes['icon'];
-    }
-
-    /**
-     * Returns the guild splash.
-     *
-     * @param string $format The image format.
-     * @param int    $size   The size of the image.
-     *
-     * @return string|null The URL to the guild splash or null.
-     */
-    public function getSplashAttribute(string $format = 'webp', int $size = 2048): ?string
-    {
-        if (! isset($this->attributes['splash'])) {
-            return null;
-        }
-
-        $allowed = ['png', 'jpg', 'webp'];
-
-        if (! in_array(strtolower($format), $allowed)) {
-            $format = 'webp';
-        }
-
-        return "https://cdn.discordapp.com/splashes/{$this->id}/{$this->attributes['splash']}.{$format}?size={$size}";
-    }
-
-    /**
-     * Returns the guild splash hash.
-     *
-     * @return string|null The guild splash hash or null.
-     */
-    protected function getSplashHashAttribute(): ?string
-    {
-        return $this->attributes['splash'] ?? null;
+        return $this->attributeCarbonHelper('joined_at');
     }
 
     /**
@@ -579,11 +610,12 @@ class Guild extends Part
      *
      * @deprecated 10.0.0 Use `$channel->stage_instances`
      *
-     * @return CollectionInterface|StageInstance[]
+     * @return ExCollectionInterface<StageInstance>|StageInstance[]
      */
-    protected function getStageInstancesAttribute(): CollectionInterface
+    protected function getStageInstancesAttribute(): ExCollectionInterface
     {
-        $stage_instances = Collection::for(StageInstance::class);
+        /** @var ExCollectionInterface<StageInstance> $stage_instances */
+        $stage_instances = $this->discord->getCollectionClass()::for(StageInstance::class);
 
         if ($channels = $this->channels) {
             /** @var Channel */
@@ -595,181 +627,113 @@ class Guild extends Part
         return $stage_instances;
     }
 
-    protected function getFeatureAnimatedBannerAttribute(): bool
-    {
-        return in_array('ANIMATED_BANNER', $this->features);
-    }
-
-    protected function getFeatureAnimatedIconAttribute(): bool
-    {
-        return in_array('ANIMATED_ICON', $this->features);
-    }
-
-    protected function getFeatureApplicationCommandPermissionsV2(): bool
-    {
-        return in_array('APPLICATION_COMMAND_PERMISSIONS_V2', $this->features);
-    }
-
-    protected function getFeatureAutoModerationAttribute(): bool
-    {
-        return in_array('AUTO_MODERATION', $this->features);
-    }
-
-    protected function getFeatureBannerAttribute(): bool
-    {
-        return in_array('BANNER', $this->features);
-    }
-
-    protected function getFeatureCommunityAttribute(): bool
-    {
-        return in_array('COMMUNITY', $this->features);
-    }
-
-    protected function getFeatureCreatorMonetizableProvisionalAttribute(): bool
-    {
-        return in_array('CREATOR_MONETIZABLE_PROVISIONAL', $this->features);
-    }
-
-    protected function getFeatureCreatorStorePageAttribute(): bool
-    {
-        return in_array('CREATOR_STORE_PAGE', $this->features);
-    }
-
-    protected function getFeatureDeveloperSupportServerAttribute(): bool
-    {
-        return in_array('DEVELOPER_SUPPORT_SERVER', $this->features);
-    }
-
-    protected function getFeatureDiscoverableAttribute(): bool
-    {
-        return in_array('DISCOVERABLE', $this->features);
-    }
-
-    protected function getFeatureFeaturableAttribute(): bool
-    {
-        return in_array('FEATURABLE', $this->features);
-    }
-
-    protected function getFeatureHasDirectoryEntryAttribute(): bool
-    {
-        return in_array('HAS_DIRECTORY_ENTRY', $this->features);
-    }
-
-    protected function getFeatureInvitesDisabledAttribute(): bool
-    {
-        return in_array('INVITES_DISABLED', $this->features);
-    }
-
-    protected function getFeatureInviteSplashAttribute(): bool
-    {
-        return in_array('INVITE_SPLASH', $this->features);
-    }
-
-    protected function getFeatureLinkedToHubAttribute(): bool
-    {
-        return in_array('LINKED_TO_HUB', $this->features);
-    }
-
-    protected function getFeatureMemberVerificationGateEnabledAttribute(): bool
-    {
-        return in_array('MEMBER_VERIFICATION_GATE_ENABLED', $this->features);
-    }
-
-    protected function getFeatureMonetizationEnabledAttribute(): bool
-    {
-        return in_array('MONETIZATION_ENABLED', $this->features);
-    }
-
-    protected function getFeatureMoreStickersAttribute(): bool
-    {
-        return in_array('MORE_STICKERS', $this->features);
-    }
-
-    protected function getFeatureNewsAttribute(): bool
-    {
-        return in_array('NEWS', $this->features);
-    }
-
-    protected function getFeaturePartneredAttribute(): bool
-    {
-        return in_array('PARTNERED', $this->features);
-    }
-
-    protected function getFeaturePreviewEnabledAttribute(): bool
-    {
-        return in_array('PREVIEW_ENABLED', $this->features);
-    }
-
-    protected function getFeaturePrivateThreadsAttribute(): bool
-    {
-        return in_array('PRIVATE_THREADS', $this->features);
-    }
-
-    protected function getFeatureRaidAlertsEnabledAttribute(): bool
-    {
-        return in_array('RAID_ALERTS_ENABLED', $this->features);
-    }
-
-    protected function getFeatureRoleIconsAttribute(): bool
-    {
-        return in_array('ROLE_ICONS', $this->features);
-    }
-
-    protected function getFeatureRoleSubscriptionsAvailableForPurchaseAttribute(): bool
-    {
-        return in_array('ROLE_SUBSCRIPTIONS_AVAILABLE_FOR_PURCHASE', $this->features);
-    }
-
-    protected function getFeatureRoleSubscriptionsEnabledAttribute(): bool
-    {
-        return in_array('ROLE_SUBSCRIPTIONS_ENABLED', $this->features);
-    }
-
-    protected function getFeatureTicketedEventsEnabledAttribute(): bool
-    {
-        return in_array('TICKETED_EVENTS_ENABLED', $this->features);
-    }
-
-    protected function getFeatureVanityUrlAttribute(): bool
-    {
-        return in_array('VANITY_URL', $this->features);
-    }
-
-    protected function getFeatureVerifiedAttribute(): bool
-    {
-        return in_array('VERIFIED', $this->features);
-    }
-
-    protected function getFeatureVipRegionsAttribute(): bool
-    {
-        return in_array('VIP_REGIONS', $this->features);
-    }
-
-    protected function getFeatureWelcomeScreenEnabledAttribute(): bool
-    {
-        return in_array('WELCOME_SCREEN_ENABLED', $this->features);
-    }
-
     /**
      * Gets the voice regions available.
      *
      * @link https://discord.com/developers/docs/resources/voice#list-voice-regions
      *
-     * @return PromiseInterface<Collection>
+     * @return PromiseInterface<ExCollectionInterface<Region>|Region[]>
+     *
+     * @deprecated 10.23.0 Use `Discord::listVoiceRegions` instead.
      */
     public function getVoiceRegions(): PromiseInterface
     {
-        if (null !== $this->regions) {
-            return resolve($this->regions);
+        return $this->discord->listVoiceRegions();
+    }
+
+    /**
+     * Returns the current user's voice state in the guild.
+     *
+     * @link https://discord.com/developers/docs/resources/voice#get-current-user-voice-state
+     *
+     * @return PromiseInterface<VoiceStateUpdate>
+     *
+     * @since 10.26.0
+     */
+    public function getCurrentUserVoiceState(): PromiseInterface
+    {
+        return $this->voice_states->getCurrentUserVoiceState($this->id);
+    }
+
+    /**
+     * Modify the current user's voice state in the guild.
+     *
+     * Caveats:
+     * - channel_id must currently point to a stage channel.
+     * - Current user must already have joined channel_id.
+     * - You must have the MUTE_MEMBERS permission to unsuppress yourself. You can always suppress yourself.
+     * - You must have the REQUEST_TO_SPEAK permission to request to speak. You can always clear your own request to speak.
+     * - You are able to set request_to_speak_timestamp to any present or future time.
+     *
+     * @link https://discord.com/developers/docs/resources/guild#modify-current-user-voice-state
+     *
+     * @param array               $data
+     * @param ?string|null        $data['channel_id']                 The ID of the channel the user is currently in.
+     * @param ?bool|null          $data['suppress']                   Toggles the user's suppress state.
+     * @param ?Carbon|string|null $data['request_to_speak_timestamp'] ISO8601 timestamp to set the user's request to speak.
+     *
+     * @return PromiseInterface
+     */
+    public function modifyCurrentUserVoiceState(array $data): PromiseInterface
+    {
+        if ($botperms = $this->getBotPermissions()) {
+            if (isset($data['suppress']) && $data['suppress'] === false) {
+                if (! $botperms->mute_members) {
+                    return reject(new NoPermissionsException("You do not have permission to mute members in the guild {$this->id}."));
+                }
+            }
+
+            if (isset($data['request_to_speak_timestamp'])) {
+                if (! $botperms->request_to_speak) {
+                    return reject(new NoPermissionsException("You do not have permission to request to speak in the guild {$this->id}."));
+                }
+            }
         }
 
-        return $this->http->get('voice/regions')->then(function ($regions) {
-            $regions = new Collection($regions);
+        return $this->voice_states->modifyCurrentUserVoiceState($this->id, $data);
+    }
 
-            $this->regions = $regions;
+    /**
+     * Returns the specified user's voice state in the guild.
+     *
+     * @link https://discord.com/developers/docs/resources/voice#get-user-voice-state
+     *
+     * @param Member|User|string $user The user or user ID.
+     *
+     * @return PromiseInterface<VoiceStateUpdate>
+     */
+    public function getUserVoiceState($user): PromiseInterface
+    {
+        return $this->voice_states->getUserVoiceState($this->id, $user);
+    }
 
-            return $regions;
-        });
+    /**
+     * Updates another user's voice state.
+     *
+     * Caveats:
+     * - channel_id must currently point to a stage channel.
+     * - User must already have joined channel_id.
+     * - You must have the MUTE_MEMBERS permission. (Since suppression is the only thing that is available currently.)
+     * - When unsuppressed, non-bot users will have their request_to_speak_timestamp set to the current time. Bot users will not.
+     * - When suppressed, the user will have their request_to_speak_timestamp removed.
+     *
+     * @link https://discord.com/developers/docs/resources/voice#modify-user-voice-state
+     *
+     * @param array        $data
+     * @param ?string|null $data['channel_id'] The ID of the channel the user is currently in.
+     * @param ?bool|null   $data['suppress']   Toggles the user's suppress state.
+     *
+     * @return PromiseInterface
+     */
+    public function modifyUserVoiceState($user, array $data): PromiseInterface
+    {
+        if ($botperms = $this->getBotPermissions()) {
+            if (! $botperms->mute_members) {
+                return reject(new NoPermissionsException("You do not have permission to mute members in the guild {$this->id}."));
+            }
+        }
+
+        return $this->voice_states->modifyUserVoiceState($this->id, $user, $data);
     }
 
     /**
@@ -786,10 +750,10 @@ class Guild extends Part
      */
     public function createRole(array $data = [], ?string $reason = null): PromiseInterface
     {
-        $botperms = $this->getBotPermissions();
-
-        if ($botperms && ! $botperms->manage_roles) {
-            return reject(new NoPermissionsException("You do not have permission to manage roles in the guild {$this->id}."));
+        if ($botperms = $this->getBotPermissions()) {
+            if (! $botperms->manage_roles) {
+                return reject(new NoPermissionsException("You do not have permission to manage roles in the guild {$this->id}."));
+            }
         }
 
         return $this->roles->save($this->factory->part(Role::class, $data), $reason);
@@ -833,9 +797,10 @@ class Guild extends Part
 
         $options = $resolver->resolve($options);
 
-        $botperms = $this->getBotPermissions();
-        if ($botperms && ! $botperms->manage_guild_expressions) {
-            return reject(new NoPermissionsException("You do not have permission to create emojis in the guild {$this->id}."));
+        if ($botperms = $this->getBotPermissions()) {
+            if (! $botperms->manage_guild_expressions) {
+                return reject(new NoPermissionsException("You do not have permission to create emojis in the guild {$this->id}."));
+            }
         }
 
         if (isset($filepath)) {
@@ -844,7 +809,7 @@ class Guild extends Part
             }
 
             $extension = strtolower(pathinfo($filepath, PATHINFO_EXTENSION));
-            if ($extension == 'jpg') {
+            if ($extension === 'jpg') {
                 $extension = 'jpeg';
             }
             $contents = file_get_contents($filepath);
@@ -905,9 +870,10 @@ class Guild extends Part
 
         $options = $resolver->resolve($options);
 
-        $botperms = $this->getBotPermissions();
-        if ($botperms && ! $botperms->manage_guild_expressions) {
-            return reject(new NoPermissionsException("You do not have permission to create stickers in the guild {$this->id}."));
+        if ($botperms = $this->getBotPermissions()) {
+            if (! $botperms->manage_guild_expressions) {
+                return reject(new NoPermissionsException("You do not have permission to create stickers in the guild {$this->id}."));
+            }
         }
 
         if (! file_exists($filepath)) {
@@ -915,7 +881,7 @@ class Guild extends Part
         }
 
         $descLength = poly_strlen($options['description']);
-        if ($descLength > 100 || $descLength == 1) {
+        if ($descLength > 100 || $descLength === 1) {
             return reject(new \LengthException("Description must be 2 to 100 characters, given {$descLength}."));
         }
 
@@ -938,7 +904,7 @@ class Guild extends Part
             $contentType = $contentTypes[$extension];
         }
 
-        if ($extension == 'lottie' && ! ($this->feature_verified || $this->feature_partnered)) {
+        if ($extension === 'lottie' && ! ($this->feature_verified || $this->feature_partnered)) {
             return reject(new \RuntimeException('Lottie stickers can be only uploaded in verified or partnered guilds.'));
         }
 
@@ -1005,7 +971,7 @@ class Guild extends Part
      */
     public function transferOwnership($member, ?string $reason = null): PromiseInterface
     {
-        if ($member instanceof Member) {
+        if (! is_string($member)) {
             $member = $member->id;
         }
 
@@ -1014,8 +980,8 @@ class Guild extends Part
             $headers['X-Audit-Log-Reason'] = $reason;
         }
 
-        return $this->http->patch(Endpoint::bind(Endpoint::GUILD), ['owner_id' => $member], $headers)->then(function ($response) use ($member) {
-            if ($response->owner_id != $member) {
+        return $this->http->patch(Endpoint::bind(Endpoint::GUILD, $this->id), ['owner_id' => $member], $headers)->then(function ($response) use ($member) {
+            if ($response->owner_id !== $member) {
                 throw new \RuntimeException('Ownership was not transferred correctly.');
             }
 
@@ -1037,7 +1003,7 @@ class Guild extends Part
         return $this->getVoiceRegions()->then(function () {
             $regions = $this->regions->map(function ($region) {
                 return $region->id;
-            })->toArray();
+            })->jsonSerialize();
 
             if (! in_array($this->region, $regions)) {
                 return self::REGION_DEFAULT;
@@ -1063,7 +1029,7 @@ class Guild extends Part
      *
      * @return PromiseInterface<AuditLog>
      */
-    public function getAuditLog(array $options = []): PromiseInterface
+    public function getAuditLog(array $queryparams = []): PromiseInterface
     {
         $resolver = new OptionsResolver();
         $resolver->setDefined([
@@ -1084,22 +1050,15 @@ class Guild extends Part
         ->setNormalizer('before', normalizePartId())
         ->setNormalizer('after', normalizePartId());
 
-        $options = $resolver->resolve($options);
+        $queryparams = $resolver->resolve($queryparams);
 
-        $botperms = $this->getBotPermissions();
-        if ($botperms && ! $botperms->view_audit_log) {
-            return reject(new NoPermissionsException("You do not have permission to view audit log in the guild {$this->id}."));
+        if ($botperms = $this->getBotPermissions()) {
+            if (! $botperms->view_audit_log) {
+                return reject(new NoPermissionsException("You do not have permission to view audit log in the guild {$this->id}."));
+            }
         }
 
-        $endpoint = Endpoint::bind(Endpoint::AUDIT_LOG, $this->id);
-
-        foreach ($options as $key => $value) {
-            $endpoint->addQuery($key, $value);
-        }
-
-        return $this->http
-            ->get($endpoint)
-            ->then(fn ($response) => $this->factory->part(AuditLog::class, (array) $response + ['guild_id' => $this->id], true));
+        return $this->audit_log->freshen($queryparams);
     }
 
     /**
@@ -1117,9 +1076,9 @@ class Guild extends Part
      *
      * @link https://discord.com/developers/docs/resources/guild#modify-guild-role-positions
      *
-     * @param CollectionInterface|array $roles  Associative array where the LHS key is the position,
-     *                                              and the RHS value is a `Role` object or a string ID,
-     *                                              e.g. `[1 => 'role_id_1', 3 => 'role_id_3']`.
+     * @param ExCollectionInterface|array $roles Associative array where the LHS key is the position,
+     *                                           and the RHS value is a `Role` object or a string ID,
+     *                                           e.g. `[1 => 'role_id_1', 3 => 'role_id_3']`.
      *
      * @throws NoPermissionsException Missing manage_roles permission.
      *
@@ -1127,16 +1086,17 @@ class Guild extends Part
      */
     public function updateRolePositions($roles): PromiseInterface
     {
-        if ($roles instanceof CollectionInterface) {
-            $roles = $roles->toArray();
+        if ($roles instanceof ExCollectionInterface) {
+            $roles = $roles->jsonSerialize();
         }
         if (! is_array($roles)) {
             return reject(new \InvalidArgumentException('Roles must be an array of Role instances or Role IDs.'));
         }
 
-        $botperms = $this->getBotPermissions();
-        if ($botperms && ! $botperms->manage_roles) {
-            return reject(new NoPermissionsException("You do not have permission to update role positions in the guild {$this->id}."));
+        if ($botperms = $this->getBotPermissions()) {
+            if (! $botperms->manage_roles) {
+                return reject(new NoPermissionsException("You do not have permission to update role positions in the guild {$this->id}."));
+            }
         }
 
         $payload = [];
@@ -1173,7 +1133,7 @@ class Guild extends Part
      * @param string|null $options['query'] Query string to match username(s) and nickname(s) against
      * @param int|null    $options['limit'] How many entries are returned (default 1, minimum 1, maximum 1000)
      *
-     * @return PromiseInterface<Collection|Member[]>
+     * @return PromiseInterface<ExCollectionInterface<Member>|Member[]>
      */
     public function searchMembers(array $options): PromiseInterface
     {
@@ -1194,7 +1154,8 @@ class Guild extends Part
         $endpoint->addQuery('limit', $options['limit']);
 
         return $this->http->get($endpoint)->then(function ($responses) {
-            $members = Collection::for(Member::class);
+            /** @var ExCollectionInterface<Member> $members */
+            $members = $this->discord->getCollectionClass()::for(Member::class);
 
             foreach ($responses as $response) {
                 if (! $member = $this->members->get('id', $response->user->id)) {
@@ -1235,7 +1196,7 @@ class Guild extends Part
         ->setAllowedValues('days', fn ($value) => ($value >= 1 && $value <= 30))
         ->setNormalizer('include_roles', function ($option, $values) {
             foreach ($values as &$value) {
-                if ($value instanceof Role) {
+                if (! is_string($value)) {
                     $value = $value->id;
                 }
             }
@@ -1245,9 +1206,10 @@ class Guild extends Part
 
         $options = $resolver->resolve($options);
 
-        $botperms = $this->getBotPermissions();
-        if ($botperms && ! ($botperms->kick_members && $botperms->manage_guild)) {
-            return reject(new NoPermissionsException("You do not have permission to get prune count in the guild {$this->id}."));
+        if ($botperms = $this->getBotPermissions()) {
+            if (! ($botperms->kick_members && $botperms->manage_guild)) {
+                return reject(new NoPermissionsException("You do not have permission to get prune count in the guild {$this->id}."));
+            }
         }
 
         $endpoint = Endpoint::bind(Endpoint::GUILD_PRUNE, $this->id);
@@ -1291,7 +1253,7 @@ class Guild extends Part
         ->setAllowedValues('days', fn ($value) => ($value >= 1 && $value <= 30))
         ->setNormalizer('include_roles', function ($option, $values) {
             foreach ($values as &$value) {
-                if ($value instanceof Role) {
+                if (! is_string($value)) {
                     $value = $value->id;
                 }
             }
@@ -1301,9 +1263,10 @@ class Guild extends Part
 
         $options = $resolver->resolve($options);
 
-        $botperms = $this->getBotPermissions();
-        if ($botperms && ! ($botperms->kick_members && $botperms->manage_guild)) {
-            return reject(new NoPermissionsException("You do not have permission to prune members in the guild {$this->id}."));
+        if ($botperms = $this->getBotPermissions()) {
+            if (! ($botperms->kick_members && $botperms->manage_guild)) {
+                return reject(new NoPermissionsException("You do not have permission to prune members in the guild {$this->id}."));
+            }
         }
 
         $headers = [];
@@ -1330,9 +1293,10 @@ class Guild extends Part
     public function getWelcomeScreen(bool $fresh = false): PromiseInterface
     {
         if (! $this->feature_welcome_screen_enabled) {
-            $botperms = $this->getBotPermissions();
-            if ($botperms && ! $botperms->manage_guild) {
-                return reject(new NoPermissionsException("You do not have permission to get welcome screen of the guild {$this->id}."));
+            if ($botperms = $this->getBotPermissions()) {
+                if (! $botperms->manage_guild) {
+                    return reject(new NoPermissionsException("You do not have permission to get welcome screen of the guild {$this->id}."));
+                }
             }
         }
 
@@ -1343,7 +1307,7 @@ class Guild extends Part
         return $this->http->get(Endpoint::bind(Endpoint::GUILD_WELCOME_SCREEN, $this->id))->then(function ($response) {
             $this->attributes['welcome_screen'] = $response;
 
-            return $this->factory->part(WelcomeScreen::class, (array) $response, true);
+            return $this->attributePartHelper('welcome_screen', WelcomeScreen::class);
         });
     }
 
@@ -1354,11 +1318,7 @@ class Guild extends Part
      */
     protected function getWelcomeScreenAttribute(): ?WelcomeScreen
     {
-        if (! isset($this->attributes['welcome_screen'])) {
-            return null;
-        }
-
-        return $this->createOf(WelcomeScreen::class, $this->attributes['welcome_screen']);
+        return $this->attributePartHelper('welcome_screen', WelcomeScreen::class);
     }
 
     /**
@@ -1366,10 +1326,10 @@ class Guild extends Part
      *
      * @link https://discord.com/developers/docs/resources/guild#modify-guild-welcome-screen
      *
-     * @param array                          $options                     An array of options. All fields are optional.
-     * @param bool|null                      $options['enabled']          Whether the welcome screen is enabled.
-     * @param object[]|WelcomeChannel[]|null $options['welcome_channels'] Channels linked in the welcome screen and their display options (maximum 5).
-     * @param string|null                    $options['description']      The server description to show in the welcome screen (maximum 140).
+     * @param array                 $options                     An array of options. All fields are optional.
+     * @param bool|null             $options['enabled']          Whether the welcome screen is enabled.
+     * @param WelcomeChannel[]|null $options['welcome_channels'] Channels linked in the welcome screen and their display options (maximum 5).
+     * @param string|null           $options['description']      The server description to show in the welcome screen (maximum 140).
      *
      * @throws NoPermissionsException Missing manage_guild permission.
      *
@@ -1398,15 +1358,16 @@ class Guild extends Part
 
         $options = $resolver->resolve($options);
 
-        $botperms = $this->getBotPermissions();
-        if ($botperms && ! $botperms->manage_guild) {
-            return reject(new NoPermissionsException("You do not have permission to update welcome screen of the guild {$this->id}."));
+        if ($botperms = $this->getBotPermissions()) {
+            if (! $botperms->manage_guild) {
+                return reject(new NoPermissionsException("You do not have permission to update welcome screen of the guild {$this->id}."));
+            }
         }
 
         return $this->http->patch(Endpoint::bind(Endpoint::GUILD_WELCOME_SCREEN, $this->id), $options)->then(function ($response) {
             $this->attributes['welcome_screen'] = $response;
 
-            return $this->factory->part(WelcomeScreen::class, (array) $response, true);
+            return $this->attributePartHelper('welcome_screen', WelcomeScreen::class);
         });
     }
 
@@ -1421,9 +1382,10 @@ class Guild extends Part
      */
     public function getWidgetSettings(): PromiseInterface
     {
-        $botperms = $this->getBotPermissions();
-        if ($botperms && ! $botperms->manage_guild) {
-            return reject(new NoPermissionsException("You do not have permission to get widget settings of the guild {$this->id}."));
+        if ($botperms = $this->getBotPermissions()) {
+            if (! $botperms->manage_guild) {
+                return reject(new NoPermissionsException("You do not have permission to get widget settings of the guild {$this->id}."));
+            }
         }
 
         return $this->http->get(Endpoint::bind(Endpoint::GUILD_WIDGET_SETTINGS, $this->id))->then(function ($response) {
@@ -1461,9 +1423,10 @@ class Guild extends Part
 
         $options = $resolver->resolve($options);
 
-        $botperms = $this->getBotPermissions();
-        if ($botperms && ! $botperms->manage_guild) {
-            return reject(new NoPermissionsException("You do not have permission to update widget settings of the guild {$this->id}."));
+        if ($botperms = $this->getBotPermissions()) {
+            if (! $botperms->manage_guild) {
+                return reject(new NoPermissionsException("You do not have permission to update widget settings of the guild {$this->id}."));
+            }
         }
 
         $headers = [];
@@ -1606,7 +1569,7 @@ class Guild extends Part
     }
 
     /**
-     * {@inheritDoc}
+     * @inheritDoc
      *
      * @link https://discord.com/developers/docs/resources/guild#create-guild-json-params
      */
@@ -1619,12 +1582,8 @@ class Guild extends Part
             'verification_level' => $this->verification_level,
             'default_message_notifications' => $this->default_message_notifications,
             'explicit_content_filter' => $this->explicit_content_filter,
-            'roles' => array_values(array_map(function (Role $role) {
-                return $role->getCreatableAttributes();
-            }, $this->roles->toArray())),
-            'channels' => array_values(array_map(function (Channel $channel) {
-                return $channel->getCreatableAttributes();
-            }, $this->channels->toArray())),
+            'roles' => array_values(array_map(fn (Role $role) => $role->getCreatableAttributes(), $this->roles->jsonSerialize())),
+            'channels' => array_values(array_map(fn (Channel $channel) => $channel->getCreatableAttributes(), $this->channels->jsonSerialize())),
             'afk_channel_id' => $this->afk_channel_id,
             'afk_timeout' => $this->afk_timeout,
             'system_channel_id' => $this->system_channel_id,
@@ -1633,7 +1592,7 @@ class Guild extends Part
     }
 
     /**
-     * {@inheritDoc}
+     * @inheritDoc
      *
      * @link https://discord.com/developers/docs/resources/guild#modify-guild-json-params
      */
@@ -1662,13 +1621,31 @@ class Guild extends Part
     }
 
     /**
-     * {@inheritDoc}
+     * Gets the originating repository of the part.
+     *
+     * @since 10.42.0
+     *
+     * @throws \Exception If the part does not have an originating repository.
+     *
+     * @return GuildRepository The repository.
      */
-    public function getRepositoryAttributes(): array
+    public function getRepository(): GuildRepository
     {
-        return [
-            'guild_id' => $this->id,
-        ];
+        return $this->discord->guilds;
+    }
+
+    /**
+     * @inheritDoc
+     */
+    public function save(?string $reason = null): PromiseInterface
+    {
+        if ($botperms = $this->getBotPermissions()) {
+            if (! $botperms->manage_guild) {
+                return reject(new NoPermissionsException("You do not have permission to save changes to the guild {$this->id}."));
+            }
+        }
+
+        return $this->getRepository()->save($this, $reason);
     }
 
     /**

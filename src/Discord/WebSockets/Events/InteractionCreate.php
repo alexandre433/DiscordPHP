@@ -1,9 +1,12 @@
 <?php
 
+declare(strict_types=1);
+
 /*
  * This file is a part of the DiscordPHP project.
  *
- * Copyright (c) 2015-present David Cole <david.cole1340@gmail.com>
+ * Copyright (c) 2015-2022 David Cole <david.cole1340@gmail.com>
+ * Copyright (c) 2020-present Valithor Obsidion <valithor@discordphp.org>
  *
  * This file is subject to the MIT license that is bundled
  * with this source code in the LICENSE.md file.
@@ -11,8 +14,13 @@
 
 namespace Discord\WebSockets\Events;
 
+use Discord\Helpers\RegisteredCommand;
 use Discord\Parts\Guild\Guild;
+use Discord\Parts\Interactions\ApplicationCommand;
+use Discord\Parts\Interactions\ApplicationCommandAutocomplete;
 use Discord\Parts\Interactions\Interaction;
+use Discord\Parts\Interactions\Request\ApplicationCommandData;
+use Discord\Parts\Interactions\Request\Option as RequestOption;
 use Discord\Repository\Guild\MemberRepository;
 use Discord\WebSockets\Event;
 
@@ -24,14 +32,14 @@ use Discord\WebSockets\Event;
 class InteractionCreate extends Event
 {
     /**
-     * {@inheritDoc}
+     * @inheritDoc
      */
     public function handle($data)
     {
         /** @var Interaction */
-        $interaction = $this->factory->part(Interaction::class, (array) $data, true);
+        $interaction = $this->factory->part(Interaction::TYPES[$data->type ?? 0], (array) $data, true);
 
-        foreach ($data->data->resolved->users ?? [] as $snowflake => $user) {
+        foreach ($interaction->data->resolved->users ?? [] as $snowflake => $user) {
             if ($userPart = $this->discord->users->get('id', $snowflake)) {
                 $userPart->fill((array) $user);
             } else {
@@ -39,53 +47,48 @@ class InteractionCreate extends Event
             }
         }
 
-        if (isset($data->member)) {
+        if ($interaction->member) {
             // Do not load guild from cache as it may delay interaction codes.
-            /** @var ?Guild */
-            if ($guild = $this->discord->guilds->offsetGet($data->guild_id)) {
+            /** @var ?Guild $guild */
+            if ($guild = $this->discord->guilds->offsetGet($interaction->guild_id)) {
+                /** @var Guild $guild */
                 $members = $guild->members;
 
-                foreach ($data->data->resolved->members ?? [] as $snowflake => $member) {
-                    $this->cacheMember($members, (array) $member + ['user' => $data->data->resolved->users->$snowflake]);
+                foreach ($interaction->data->resolved->members ?? [] as $snowflake => $member) {
+                    $this->cacheMember($members, (array) $member + ['user' => $interaction->data->resolved->users->get('id', $snowflake)]);
                 }
 
-                $this->cacheMember($members, (array) $data->member);
+                $this->cacheMember($members, (array) $interaction->member);
             }
 
             // User caching from member
-            $this->cacheUser($data->member->user);
-        }
-
-        if (isset($data->user)) {
-            // User caching from user dm
-            $this->cacheUser($data->user);
-        }
-
-        if ($data->type == Interaction::TYPE_APPLICATION_COMMAND) {
-            $command = $data->data;
-            if (isset($this->discord->application_commands[$command->name])) {
-                $this->discord->application_commands[$command->name]->execute($command->options ?? [], $interaction);
+            if ($interaction->member->user) {
+                $this->cacheUser($interaction->member->user);
             }
-        } elseif ($data->type == Interaction::TYPE_APPLICATION_COMMAND_AUTOCOMPLETE) {
-            $command = $data->data;
-            if (isset($this->discord->application_commands[$command->name])) {
-                $checkCommand = function ($command, $options) use (&$checkCommand, $interaction) {
-                    foreach ($options as $option) {
-                        if ($subCommand = $command->getSubCommand($option->name)) {
-                            if (! empty($option->focused)) {
-                                return $subCommand->suggest($interaction);
-                            }
-                            if (! empty($option->options)) {
-                                return $checkCommand($subCommand, $option->options);
-                            }
-                        } elseif (! empty($option->focused)) {
-                            return $command->suggest($interaction);
-                        }
-                    }
+        }
 
-                    return false;
-                };
-                $checkCommand($this->discord->application_commands[$command->name], $command->options);
+        if ($interaction->user) {
+            // User caching from user dm
+            $this->cacheUser($interaction->user);
+        }
+
+        if ($interaction->entitlements) {
+            foreach ($interaction->entitlements as $entitlement) {
+                if ($entitlementPart = $this->discord->application->entitlements->get('id', $entitlement->id)) {
+                    $entitlementPart->fill((array) $entitlement);
+                } else {
+                    $this->discord->application->entitlements->set($entitlement->id, $this->discord->application->entitlements->create($entitlement, true));
+                }
+            }
+        }
+
+        if ($interaction instanceof ApplicationCommand || $interaction instanceof ApplicationCommandAutocomplete) {
+            /** @var ApplicationCommandData $command */
+            $command = $interaction->data;
+            if (isset($this->discord->application_commands[$command->name])) {
+                $interaction instanceof ApplicationCommand
+                    ? $this->discord->application_commands[$command->name]->execute($command->options ?? [], $interaction)
+                    : $this->checkCommand($this->discord->application_commands[$command->name], $command->options, $interaction);
             }
         }
 
@@ -93,13 +96,45 @@ class InteractionCreate extends Event
     }
 
     /**
-     * {@inheritDoc}
+     * Recursively checks and handles command options for an interaction.
+     *
+     * @param RegisteredCommand                                    $command     The command or subcommand to check.
+     * @param ExCollectionInterface<RequestOption>|RequestOption[] $options     The list of options to process.
+     * @param ApplicationCommand|ApplicationCommandAutocomplete    $interaction The interaction instance from Discord.
+     *
+     * @return bool Returns true if a suggestion was triggered, otherwise false.
+     */
+    protected function checkCommand(RegisteredCommand $command, $options, Interaction $interaction): bool
+    {
+        foreach ($options as $option) {
+            /** @var ?RegisteredCommand $subCommand */
+            if ($subCommand = $command->getSubCommand($option->name)) {
+                if ($option->focused) {
+                    return $subCommand->suggest($interaction);
+                }
+                if ($option->options) {
+                    return $this->checkCommand($subCommand, $option->options, $interaction);
+                }
+            } elseif ($option->focused) {
+                return $command->suggest($interaction);
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @inheritDoc
      */
     protected function cacheMember(MemberRepository $members, array $memberdata): void
     {
+        if (! $id = $memberdata['user']->id ?? $memberdata['id'] ?? null) {
+            return;
+        }
+
         // Do not load members from cache as it may delay interaction codes.
-        if ($member = $members->offsetGet($memberdata['user']->id)) {
-            $member->fill($memberdata);
+        if ($member = $members->offsetGet($id)) {
+            $member->fill(['user' => $memberdata]);
         } else {
             $members->pushItem($members->create($memberdata, true));
         }

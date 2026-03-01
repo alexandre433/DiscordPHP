@@ -1,9 +1,12 @@
 <?php
 
+declare(strict_types=1);
+
 /*
  * This file is a part of the DiscordPHP project.
  *
- * Copyright (c) 2015-present David Cole <david.cole1340@gmail.com>
+ * Copyright (c) 2015-2022 David Cole <david.cole1340@gmail.com>
+ * Copyright (c) 2020-present Valithor Obsidion <valithor@discordphp.org>
  *
  * This file is subject to the MIT license that is bundled
  * with this source code in the LICENSE.md file.
@@ -11,7 +14,7 @@
 
 namespace Discord\WebSockets\Events;
 
-use Discord\Helpers\Collection;
+use Discord\Helpers\ExCollectionInterface;
 use Discord\WebSockets\Event;
 use Discord\Parts\Guild\Guild;
 use Discord\Parts\Guild\Sticker;
@@ -24,12 +27,14 @@ use Discord\Parts\Guild\Sticker;
 class GuildStickersUpdate extends Event
 {
     /**
-     * {@inheritDoc}
+     * @inheritDoc
      */
     public function handle($data)
     {
-        $oldStickers = Collection::for(Sticker::class);
-        $stickerParts = Collection::for(Sticker::class);
+        /** @var ExCollectionInterface<Sticker> $oldStickers */
+        $oldStickers = $this->discord->getCollectionClass()::for(Sticker::class);
+        /** @var ExCollectionInterface<Sticker> $stickerParts */
+        $stickerParts = $this->discord->getCollectionClass()::for(Sticker::class);
 
         /** @var ?Guild */
         if ($guild = yield $this->discord->guilds->cacheGet($data->guild_id)) {
@@ -50,7 +55,7 @@ class GuildStickersUpdate extends Event
         }
 
         if (isset($guild)) {
-            yield $guild->stickers->cache->setMultiple($stickerParts->toArray());
+            yield $guild->stickers->cache->setMultiple($stickerParts->jsonSerialize());
         }
 
         return [$stickerParts, $oldStickers];

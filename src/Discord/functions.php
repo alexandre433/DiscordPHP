@@ -1,9 +1,12 @@
 <?php
 
+declare(strict_types=1);
+
 /*
  * This file is a part of the DiscordPHP project.
  *
- * Copyright (c) 2015-present David Cole <david.cole1340@gmail.com>
+ * Copyright (c) 2015-2022 David Cole <david.cole1340@gmail.com>
+ * Copyright (c) 2020-present Valithor Obsidion <valithor@discordphp.org>
  *
  * This file is subject to the MIT license that is bundled
  * with this source code in the LICENSE.md file.
@@ -16,6 +19,7 @@ use Discord\Parts\Channel\Channel;
 use Discord\Parts\Channel\Message;
 use Discord\Parts\Guild\Role;
 use Discord\Parts\Part;
+use Discord\Parts\Thread\Thread;
 use Discord\Parts\User\Member;
 use Discord\Parts\User\User;
 use React\EventLoop\Loop;
@@ -87,8 +91,8 @@ function mentioned(Part|string $part, Message $message): bool
     return match (true) {
         $part instanceof User, $part instanceof Member => $message->mentions->has($part->id),
         $part instanceof Role => $message->mention_roles->has($part->id),
-        $part instanceof Channel => str_contains($message->content, "<#{$part->id}>"),
-        default => str_contains($message->content, $part),
+        $part instanceof Channel || $part instanceof Thread => str_contains($message->content, "<#{$part->id}>"),
+        default => false,
     };
 }
 
@@ -109,6 +113,7 @@ function getColor(int|string $color = 0): int
 
     if (preg_match('/^([a-z]+)$/ui', $color, $match)) {
         $colorName = strtolower($match[1]);
+
         return COLORTABLE[$colorName] ?? 0;
     }
 
@@ -131,7 +136,7 @@ function getColor(int|string $color = 0): int
  */
 function contains(string $string, array $matches): bool
 {
-    return array_reduce($matches, fn($carry, $match) => $carry || str_contains($string, $match), false);
+    return array_reduce($matches, fn ($carry, $match) => $carry || str_contains($string, $match), false);
 }
 
 /**
@@ -157,10 +162,10 @@ function studly(string $string): string
  *
  * @since 5.0.12
  */
-function poly_strlen(string $str): int
+function poly_strlen(string $str, ?string $encoding = null): int
 {
     return function_exists('mb_strlen')
-        ? mb_strlen($str)
+        ? mb_strlen($str, $encoding)
         : strlen($str);
 }
 
@@ -180,7 +185,7 @@ function imageToBase64(string $filepath): string
     }
 
     $mimetype = \mime_content_type($filepath);
-    $allowed = ['image/jpeg', 'image/png', 'image/gif'];
+    static $allowed = ['image/jpeg', 'image/png', 'image/gif'];
 
     if (! in_array($mimetype, $allowed)) {
         throw new \InvalidArgumentException('The given filepath is not one of jpeg, png or gif.');
@@ -238,7 +243,7 @@ function getSnowflakeTimestamp(string $snowflake)
  */
 function normalizePartId(string $id_field = 'id'): \Closure
 {
-    return static fn(Options $options, $part) => $part instanceof Part
+    return static fn (Options $options, $part) => $part instanceof Part
         ? $part->{$id_field}
         : $part;
 }

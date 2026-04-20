@@ -18,7 +18,6 @@ use Discord\WebSockets\Event;
 use Discord\Parts\Channel\Channel;
 use Discord\Parts\Channel\Message;
 use Discord\Parts\Guild\Guild;
-use Discord\Parts\Thread\Thread;
 use Discord\Parts\WebSockets\MessageReaction;
 
 /**
@@ -37,14 +36,8 @@ class MessageReactionRemoveEmoji extends Event
         if (isset($data->guild_id) && $guild = yield $this->discord->guilds->cacheGet($data->guild_id)) {
             /** @var ?Channel */
             if (! $channel = yield $guild->channels->cacheGet($data->channel_id)) {
-                /** @var Channel */
-                foreach ($guild->channels as $channel) {
-                    /** @var ?Thread */
-                    if ($thread = yield $channel->threads->cacheGet($data->channel_id)) {
-                        $channel = $thread;
-                        break;
-                    }
-                }
+                /** @var ?Thread */
+                $channel = yield from $guild->getThread($data->channel_id);
             }
         } else {
             /** @var ?Channel */

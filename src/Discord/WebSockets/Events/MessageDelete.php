@@ -45,14 +45,8 @@ class MessageDelete extends Event
             if ($guild = yield $this->discord->guilds->cacheGet($data->guild_id)) {
                 /** @var ?Channel */
                 if (! $channel = yield $guild->channels->cacheGet($data->channel_id)) {
-                    /** @var Channel */
-                    foreach ($guild->channels as $parent) {
-                        /** @var ?Thread */
-                        if ($thread = yield $parent->threads->cacheGet($data->channel_id)) {
-                            $channel = $thread;
-                            break;
-                        }
-                    }
+                    /** @var ?Thread */
+                    $channel = yield from $guild->getThread($data->channel_id);
                 }
 
                 if (isset($channel)) {

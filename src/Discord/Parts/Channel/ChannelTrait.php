@@ -629,10 +629,21 @@ trait ChannelTrait
      */
     public function createMessageCollector(callable $filter, array $options = []): PromiseInterface
     {
-        $deferred = new Deferred();
+        $eventHandler = null;
+        $timer = null;
+
+        $deferred = new Deferred(function () use (&$eventHandler, &$timer) {
+            $this->discord->removeListener(Event::MESSAGE_CREATE, $eventHandler);
+            $eventHandler = null;
+
+            if (null !== $timer) {
+                $this->discord->getLoop()->cancelTimer($timer);
+                $timer = null;
+            }
+        });
+
         /** @var ExCollectionInterface $messages */
         $messages = new ($this->discord->getCollectionClass())([], null, null);
-        $timer = null;
 
         $options = array_merge([
             'time' => false,
@@ -652,9 +663,11 @@ trait ChannelTrait
                 if ($options['limit'] !== false && count($messages) >= $options['limit']) {
                     $this->discord->removeListener(Event::MESSAGE_CREATE, $eventHandler);
                     $deferred->resolve($messages);
+                    $eventHandler = null;
 
                     if (null !== $timer) {
                         $this->discord->getLoop()->cancelTimer($timer);
+                        $timer = null;
                     }
                 }
             }
@@ -663,9 +676,11 @@ trait ChannelTrait
         $this->discord->on(Event::MESSAGE_CREATE, $eventHandler);
 
         if ($options['time'] !== false) {
-            $timer = $this->discord->getLoop()->addTimer($options['time'] / 1000, function () use (&$eventHandler, &$messages, &$deferred) {
+            $timer = $this->discord->getLoop()->addTimer($options['time'] / 1000, function () use (&$eventHandler, &$messages, &$deferred, &$timer) {
                 $this->discord->removeListener(Event::MESSAGE_CREATE, $eventHandler);
                 $deferred->resolve($messages);
+                $eventHandler = null;
+                $timer = null;
             });
         }
 

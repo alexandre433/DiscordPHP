@@ -90,6 +90,7 @@ abstract class Event
     public const GUILD_SOUNDBOARD_SOUND_CREATE = 'GUILD_SOUNDBOARD_SOUND_CREATE';
     public const GUILD_SOUNDBOARD_SOUND_UPDATE = 'GUILD_SOUNDBOARD_SOUND_UPDATE';
     public const GUILD_SOUNDBOARD_SOUND_DELETE = 'GUILD_SOUNDBOARD_SOUND_DELETE';
+    public const GUILD_SOUNDBOARD_SOUNDS_UPDATE = 'GUILD_SOUNDBOARD_SOUNDS_UPDATE';
     public const SOUNDBOARD_SOUNDS = 'SOUNDBOARD_SOUNDS';
 
     // Channel
@@ -109,6 +110,12 @@ abstract class Event
     // Voice
     public const VOICE_STATE_UPDATE = 'VOICE_STATE_UPDATE';
     public const VOICE_SERVER_UPDATE = 'VOICE_SERVER_UPDATE';
+    /** Sent in response to Request Channel Info (ephemeral channel data). */
+    public const CHANNEL_INFO = 'CHANNEL_INFO';
+    /** Sent when the voice channel status changes. */
+    public const VOICE_CHANNEL_STATUS_UPDATE = 'VOICE_CHANNEL_STATUS_UPDATE';
+    /** Sent when the voice channel start time changes. */
+    public const VOICE_CHANNEL_START_TIME_UPDATE = 'VOICE_CHANNEL_START_TIME_UPDATE';
 
     // Stage Instance
     public const STAGE_INSTANCE_CREATE = 'STAGE_INSTANCE_CREATE';
@@ -131,6 +138,15 @@ abstract class Event
     public const ENTITLEMENT_CREATE = 'ENTITLEMENT_CREATE';
     public const ENTITLEMENT_UPDATE = 'ENTITLEMENT_UPDATE';
     public const ENTITLEMENT_DELETE = 'ENTITLEMENT_DELETE';
+
+    // Subscriptions
+    public const SUBSCRIPTION_CREATE = 'SUBSCRIPTION_CREATE';
+    public const SUBSCRIPTION_UPDATE = 'SUBSCRIPTION_UPDATE';
+    public const SUBSCRIPTION_DELETE = 'SUBSCRIPTION_DELETE';
+
+    // Game Server
+    public const GAME_SERVER_UPDATE = 'GAME_SERVER_UPDATE';
+    public const GAME_SERVER_DELETE = 'GAME_SERVER_DELETE';
 
     /**
      * The Discord client instance.

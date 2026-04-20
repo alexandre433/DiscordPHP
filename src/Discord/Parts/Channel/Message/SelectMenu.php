@@ -22,12 +22,24 @@ use Discord\Helpers\ExCollectionInterface;
  * On desktop, clicking on a select menu opens a dropdown-style UI.
  * On mobile, tapping a select menu opens up a half-sheet with the options.
  *
- * @link https://discord.com/developers/docs/components/reference#select-menus
+ * @link https://docs.discord.com/developers/components/reference#select-menus
  *
  * @since 10.11.0
  */
 abstract class SelectMenu extends Interactive
 {
+    /**
+     * Gets the type of the select menu.
+     *
+     * In message interaction responses `component_type` will be returned and in modal interaction responses `type` will be returned.
+     *
+     * @return int
+     */
+    protected function getTypeAttribute(): int
+    {
+        return $this->attributes['type'] ?? $this->attributes['component_type'];
+    }
+
     protected function getDefaultValuesAttribute(): ExCollectionInterface
     {
         return $this->attributeCollectionHelper('default_values', DefaultValue::class);

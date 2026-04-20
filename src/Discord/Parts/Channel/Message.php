@@ -35,6 +35,7 @@ use Discord\Parts\Channel\Message\Activity;
 use Discord\Parts\Channel\Message\MessageCall;
 use Discord\Parts\Channel\Message\MessageReference;
 use Discord\Parts\Channel\Message\RoleSubscriptionData;
+use Discord\Parts\Channel\Message\SharedClientTheme;
 use Discord\Parts\Guild\Guild;
 use Discord\Parts\Guild\Sticker;
 use Discord\Parts\Interactions\Request\Resolved;
@@ -53,7 +54,7 @@ use function React\Promise\reject;
 /**
  * A message which is posted to a Discord text channel.
  *
- * @link https://discord.com/developers/docs/resources/message#message-object
+ * @link https://docs.discord.com/developers/resources/message#message-object
  *
  * @since 2.0.0
  *
@@ -70,7 +71,7 @@ use function React\Promise\reject;
  * @property      ExCollectionInterface<User>|User[]                       $mentions               A collection of the users mentioned in the message.
  * @property      ExCollectionInterface<?Role>|array<string, ?Role>        $mention_roles          A collection of roles that were mentioned in the message.
  * @property      ExCollectionInterface<Channel>|Channel[]                 $mention_channels       Collection of mentioned channels.
- * @property      ExCollectionInterface<Attachment>|Attachment[]           $attachments            Collection of attachment objects.
+ * @property      ExCollectionInterface<Attachment>|Attachment[]           $attachments            Collection of attachment objects. This will be empty if the message has the `IS_COMPONENTS_V2` flag (`1 << 15`) set and attachments will instead be included within the `components` field.
  * @property      ExCollectionInterface<Embed>|Embed[]                     $embeds                 A collection of embed objects.
  * @property      string|null                                              $nonce                  A randomly generated string that provides verification for the client. Not required.
  * @property      bool                                                     $pinned                 Whether the message is pinned to the channel.
@@ -93,7 +94,8 @@ use function React\Promise\reject;
  * @property      RoleSubscriptionData|null                                $role_subscription_data Data of the role subscription purchase or renewal that prompted this `ROLE_SUBSCRIPTION_PURCHASE` message.
  * @property      Resolved|null                                            $resolved               Data for users, members, channels, and roles in the message's auto-populated select menus
  * @property      Poll|null                                                $poll                   The poll attached to the message.
- * @property      MessageCall|null                                         $call                   The call associated with the message
+ * @property      MessageCall|null                                         $call                   The call associated with the message.
+ * @property      SharedClientTheme|null                                   $shared_client_theme    The custom client-side theme shared via the message.
  *
  * @property-read bool $crossposted                            Message has been crossposted.
  * @property-read bool $is_crosspost                           Message is a crosspost from another channel.
@@ -841,6 +843,16 @@ class Message extends Part
     }
 
     /**
+     * Returns the shared_client_theme attribute.
+     *
+     * @return SharedClientTheme|null
+     */
+    protected function getSharedClientThemeAttribute(): ?SharedClientTheme
+    {
+        return $this->attributePartHelper('shared_client_theme', SharedClientTheme::class);
+    }
+
+    /**
      * Returns the message link attribute.
      *
      * @return string|null
@@ -857,7 +869,7 @@ class Message extends Part
     /**
      * Starts a public thread from the message.
      *
-     * @link https://discord.com/developers/docs/resources/channel#start-thread-from-message
+     * @link https://docs.discord.com/developers/resources/channel#start-thread-from-message
      *
      * @param array       $options                          Thread params.
      * @param string      $options['name']                  The name of the thread.
@@ -945,7 +957,7 @@ class Message extends Part
     /**
      * Replies to the message.
      *
-     * @link https://discord.com/developers/docs/resources/message#create-message
+     * @link https://docs.discord.com/developers/resources/message#create-message
      *
      * @param string|MessageBuilder $message The reply message.
      *
@@ -967,7 +979,7 @@ class Message extends Part
     /**
      * Crossposts the message to any following channels (publish announcement).
      *
-     * @link https://discord.com/developers/docs/resources/message#crosspost-message
+     * @link https://docs.discord.com/developers/resources/message#crosspost-message
      *
      * @throws \RuntimeException      Message has already been crossposted.
      * @throws NoPermissionsException Missing permission:
@@ -1049,7 +1061,7 @@ class Message extends Part
     /**
      * Reacts to the message.
      *
-     * @link https://discord.com/developers/docs/resources/message#create-reaction
+     * @link https://docs.discord.com/developers/resources/message#create-reaction
      *
      * @param Emoji|string $emoticon The emoticon to react with. (custom: ':michael:251127796439449631')
      *
@@ -1078,8 +1090,8 @@ class Message extends Part
      *
      * @deprecated 10.14.0 Use `Message::deleteAllReactions()`, `Message::deleteOwnReaction()`, `Message::deleteUserReaction()`, or `Message::deleteEmojiReactions()`.
      *
-     * @link https://discord.com/developers/docs/resources/message#delete-own-reaction
-     * @link https://discord.com/developers/docs/resources/message#delete-user-reaction
+     * @link https://docs.discord.com/developers/resources/message#delete-own-reaction
+     * @link https://docs.discord.com/developers/resources/message#delete-user-reaction
      *
      * @param int               $type     The type of deletion to perform.
      * @param Emoji|string|null $emoticon The emoticon to delete (if not all).
@@ -1228,7 +1240,7 @@ class Message extends Part
     /**
      * Edits the message.
      *
-     * @link https://discord.com/developers/docs/resources/message#edit-message
+     * @link https://docs.discord.com/developers/resources/message#edit-message
      *
      * @param MessageBuilder $message Contains the new contents of the message. Note that fields not specified in the builder will not be overwritten.
      *
@@ -1257,7 +1269,7 @@ class Message extends Part
     /**
      * Deletes the message from the channel.
      *
-     * @link https://discord.com/developers/docs/resources/message#delete-message
+     * @link https://docs.discord.com/developers/resources/message#delete-message
      *
      * @param string|null $reason Reason for Audit Log (if supported).
      *
@@ -1390,7 +1402,7 @@ class Message extends Part
     /**
      * @inheritDoc
      *
-     * @link https://discord.com/developers/docs/resources/message#edit-message-jsonform-params
+     * @link https://docs.discord.com/developers/resources/message#edit-message-jsonform-params
      */
     public function getUpdatableAttributes(): array
     {

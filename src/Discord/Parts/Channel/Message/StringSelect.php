@@ -23,7 +23,7 @@ use Discord\Helpers\ExCollectionInterface;
  *
  * String Selects must be placed inside an Action Row and are only available in messages. An Action Row can contain only one select menu and cannot contain buttons if it has a select menu.
  *
- * @link https://discord.com/developers/docs/components/reference#string-select
+ * @link https://docs.discord.com/developers/components/reference#string-select
  *
  * @since 10.11.0
  *
@@ -36,6 +36,8 @@ use Discord\Helpers\ExCollectionInterface;
  * @property int|null                                                       $max_values  Maximum number of items that can be chosen (defaults to 1); max 25.
  * @property bool|null                                                      $required    Whether the string select is required to answer in a modal (defaults to true).
  * @property bool|null                                                      $disabled    Whether select menu is disabled (defaults to false). Using in a modal will result in an error.
+ *
+ * @property-read string[]|null $values The text of the selected options. (Only included in the response).
  */
 class StringSelect extends SelectMenu
 {
@@ -52,6 +54,10 @@ class StringSelect extends SelectMenu
         'max_values',
         'required',
         'disabled',
+        'values',
+
+        // @internal
+        'component_type',
     ];
 
     /**

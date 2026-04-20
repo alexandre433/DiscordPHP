@@ -17,6 +17,7 @@ namespace Discord\Parts\User;
 use Discord\Exceptions\FileNotFoundException;
 use Discord\Helpers\ExCollectionInterface;
 use Discord\Http\Endpoint;
+use Discord\Parts\Guild\Sticker;
 use Discord\Parts\OAuth\Application;
 use Discord\Parts\OAuth\ApplicationRoleConnectionMetadata;
 use Discord\Parts\Part;
@@ -25,6 +26,7 @@ use Discord\Repository\GuildRepository;
 use Discord\Repository\LobbyRepository;
 use Discord\Repository\PrivateChannelRepository;
 use Discord\Repository\SoundRepository;
+use Discord\Repository\StickerPackRepository;
 use Discord\Repository\UserRepository;
 use React\Promise\PromiseInterface;
 
@@ -57,6 +59,7 @@ use function React\Promise\resolve;
  * @property GuildRepository          $guilds
  * @property PrivateChannelRepository $private_channels
  * @property SoundRepository          $sounds
+ * @property StickerPackRepository    $sticker_packs
  * @property UserRepository           $users
  */
 class Client extends Part
@@ -84,6 +87,7 @@ class Client extends Part
         // internal
         'connections',
         'role_connection',
+        'sticker_packs',
     ];
 
     /**
@@ -95,6 +99,7 @@ class Client extends Part
         'lobbies' => LobbyRepository::class,
         'private_channels' => PrivateChannelRepository::class,
         'sounds' => SoundRepository::class,
+        'sticker_packs' => StickerPackRepository::class,
         'users' => UserRepository::class,
     ];
 
@@ -131,7 +136,7 @@ class Client extends Part
      * Returns a list of connection objects.
      * Requires the connections OAuth2 scope.
      *
-     * @link https://discord.com/developers/docs/resources/user#get-current-user-guild-member
+     * @link https://docs.discord.com/developers/resources/user#get-current-user-guild-member
      *
      * @return PromiseInterface<ExCollectionInterface<Connection>|Connection[]>
      *
@@ -235,7 +240,7 @@ class Client extends Part
     /**
      * Updates the current application associated with the bot user.
      *
-     * @link https://discord.com/developers/docs/resources/application#edit-current-application
+     * @link https://docs.discord.com/developers/resources/application#edit-current-application
      *
      * @param array $options Array of fields to update. All fields are optional.
      *
@@ -302,6 +307,21 @@ class Client extends Part
     }
 
     /**
+     * Returns a sticker object for the given sticker ID.
+     *
+     * @param string $sticker_id The ID of the sticker to retrieve.
+     *
+     * @return PromiseInterface<Sticker>
+     *
+     * @since 10.47.0 Deprecated in favor of StickerPackRepository::get()
+     * @since 10.46.0
+     */
+    public function getSticker(string $sticker_id): PromiseInterface
+    {
+        return resolve($this->sticker_packs->get('id', $sticker_id));
+    }
+
+    /**
      * Saves the client instance.
      *
      * @return PromiseInterface
@@ -314,7 +334,7 @@ class Client extends Part
     /**
      * @inheritDoc
      *
-     * @link https://discord.com/developers/docs/resources/user#modify-current-user-json-params
+     * @link https://docs.discord.com/developers/resources/user#modify-current-user-json-params
      */
     public function getUpdatableAttributes(): array
     {

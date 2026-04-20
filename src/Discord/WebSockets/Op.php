@@ -17,7 +17,7 @@ namespace Discord\WebSockets;
 /**
  * Contains constants used in websockets.
  *
- * @link https://discord.com/developers/docs/topics/opcodes-and-status-codes
+ * @link https://docs.discord.com/developers/topics/opcodes-and-status-codes
  *
  * @since 3.2.1
  */
@@ -30,7 +30,7 @@ class Op
      * payload type. Your connection to our gateway may also sometimes close.
      * When it does, you will receive a close code that tells you what happened.
      *
-     * @link https://discord.com/developers/docs/topics/opcodes-and-status-codes#gateway-gateway-opcodes
+     * @link https://docs.discord.com/developers/topics/opcodes-and-status-codes#gateway-gateway-opcodes
      */
 
     /** Dispatches an event. */
@@ -65,13 +65,15 @@ class Op
     public const OP_HEARTBEAT_ACK = 11;
     /** Request soundboard sounds. */
     public const OP_REQUEST_SOUNDBOARD_SOUNDS = 31;
+    /** Request ephemeral channel data for channels in a guild. */
+    public const OP_REQUEST_CHANNEL_INFO = 43;
 
     /**
      * Voice Opcodes.
      *
      * Our voice gateways have their own set of opcodes and close codes.
      *
-     * @link https://discord.com/developers/docs/topics/opcodes-and-status-codes#voice-voice-opcodes
+     * @link https://docs.discord.com/developers/topics/opcodes-and-status-codes#voice-voice-opcodes
      */
 
     /** Used to begin a voice WebSocket connection. */
@@ -141,7 +143,7 @@ class Op
      * what the application defined close codes for the gateway are, and which
      * close codes you should not attempt to reconnect.
      *
-     * @link https://discord.com/developers/docs/topics/opcodes-and-status-codes#gateway-gateway-close-event-codes
+     * @link https://docs.discord.com/developers/topics/opcodes-and-status-codes#gateway-gateway-close-event-codes
      */
 
     /** Normal close or heartbeat is invalid. */
@@ -182,7 +184,7 @@ class Op
     /**
      * Voice Close Event Codes.
      *
-     * @link https://discord.com/developers/docs/topics/opcodes-and-status-codes#voice-voice-close-event-codes
+     * @link https://docs.discord.com/developers/topics/opcodes-and-status-codes#voice-voice-close-event-codes
      */
 
     /** Can't find the server. */

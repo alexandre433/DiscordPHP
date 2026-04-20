@@ -49,7 +49,7 @@ use function React\Promise\resolve;
 /**
  * A Channel can be either a text or voice channel on a Discord guild.
  *
- * @link https://discord.com/developers/docs/resources/channel#channel-object
+ * @link https://docs.discord.com/developers/resources/channel#channel-object
  *
  * @todo Class will be abstract and deprecated for userland in v11.
  *
@@ -289,7 +289,7 @@ class Channel extends Part implements Stringable
     /**
      * Sets permissions in a channel.
      *
-     * @link https://discord.com/developers/docs/resources/channel#edit-channel-permissions
+     * @link https://docs.discord.com/developers/resources/channel#edit-channel-permissions
      *
      * @param Part        $part   A role or member.
      * @param array       $allow  An array of permissions to allow.
@@ -330,7 +330,7 @@ class Channel extends Part implements Stringable
     /**
      * Sets an overwrite to the channel.
      *
-     * @link https://discord.com/developers/docs/resources/channel#edit-channel-permissions
+     * @link https://docs.discord.com/developers/resources/channel#edit-channel-permissions
      *
      * @param Part        $part      A role or member.
      * @param Overwrite   $overwrite An overwrite object.
@@ -646,7 +646,7 @@ class Channel extends Part implements Stringable
                 if (! $voiceChannel = $member->getVoiceChannel()) {
                     return reject(new \RuntimeException('Bot must be connected to a voice channel to send soundboard sounds.'));
                 }
-                if (! $voiceChannel->id === $this->id) {
+                if ($voiceChannel->id !== $this->id) {
                     return reject(new \RuntimeException("Bot must be connected to the voice channel {$this->id} to send it soundboard sounds."));
                 }
                 if ($member->deaf || $member->mute) { // Member can also not be self-muted or suppressed
@@ -674,9 +674,89 @@ class Channel extends Part implements Stringable
     }
 
     /**
+     * Sets the voice channel status string for this channel.
+     *
+     * @link https://docs.discord.com/developers/resources/channel#set-voice-channel-status
+     *
+     * @param string|null $status The status string to set (up to 500 characters). Use null to clear.
+     * @param string|null $reason Reason for Audit Log.
+     *
+     * @throws \RuntimeException      If the channel is not voice-based.
+     * @throws NoPermissionsException If the bot lacks the required permissions.
+     *
+     * @return PromiseInterface
+     *
+     * @since 10.48.0
+     */
+    public function setVoiceChannelStatus(?string $status = null, ?string $reason = null): PromiseInterface
+    {
+        if (! $this->isVoiceBased()) {
+            return reject(new \RuntimeException('You cannot set a voice channel status on a non-voice channel.'));
+        }
+
+        if ($this->guild !== null) {
+            if ($botperms = $this->getBotPermissions()) {
+                // If the bot is not connected to the voice channel, MANAGE_CHANNELS is required.
+                $connected = false;
+                if ($member = $this->guild->members->get('id', $this->discord->id)) {
+                    if ($voiceChannel = $member->getVoiceChannel()) {
+                        if ($voiceChannel->id === $this->id) {
+                            $connected = true;
+                        }
+                    }
+                }
+
+                if (! $connected && ! $botperms->manage_channels) {
+                    return reject(new NoPermissionsException("You do not have permission to set the voice channel status for the channel {$this->id}."));
+                }
+
+                if (! $botperms->set_voice_channel_status) {
+                    return reject(new NoPermissionsException("You do not have permission to set the voice channel status for the channel {$this->id}."));
+                }
+            }
+        }
+
+        $payload = ['status' => $status];
+
+        $headers = [];
+        if (isset($reason)) {
+            $headers['X-Audit-Log-Reason'] = $reason;
+        }
+
+        return $this->http->put(Endpoint::bind(Endpoint::CHANNEL_VOICE_STATUS, $this->id), $payload, $headers);
+    }
+
+    /**
+     * Follow an Announcement Channel to send messages to a target channel.
+     *
+     * Requires the MANAGE_WEBHOOKS permission in the target channel.
+     *
+     * Returns a followed channel object. Fires a Webhooks Update Gateway event for the target channel.
+     *
+     * @link https://docs.discord.com/developers/resources/channel#followed-channel-object
+     *
+     * @param string $webhookChannelId ID of the channel to receive crossposted messages.
+     *
+     * @return PromiseInterface<array{channel: Channel|int, webhook: int}>
+     *
+     * @since 10.46.0
+     */
+    public function follow(string $webhookChannelId): PromiseInterface
+    {
+        $payload = ['webhook_channel_id' => $webhookChannelId];
+
+        return $this->http->post(Endpoint::bind(Endpoint::CHANNEL_FOLLOW, $this->id), $payload)->then(
+            fn ($response) => [
+                'channel' => $this->discord->getChannel($response->channel_id) ?? $response->channel_id,
+                'webhook' => $response->webhook_id,
+            ]
+        );
+    }
+
+    /**
      * Creates an invite for the channel.
      *
-     * @link https://discord.com/developers/docs/resources/channel#create-channel-invite
+     * @link https://docs.discord.com/developers/resources/channel#create-channel-invite
      *
      * @param array       $options                          An array of options. All fields are optional.
      * @param int         $options['max_age']               The time that the invite will be valid in seconds.
@@ -756,7 +836,7 @@ class Channel extends Part implements Stringable
     /**
      * Deletes a given number of messages, in order of time sent.
      *
-     * @link https://discord.com/developers/docs/resources/channel#bulk-delete-messages
+     * @link https://docs.discord.com/developers/resources/channel#bulk-delete-messages
      *
      * @param int         $value
      * @param string|null $reason Reason for Audit Log (only for bulk messages).
@@ -782,7 +862,7 @@ class Channel extends Part implements Stringable
      * Deleting a category does not delete its child channels; they will have their parent_id removed and a Channel Update Gateway event will fire for each of them.
      * For Community guilds, the Rules or Guidelines channel and the Community Updates channel cannot be deleted.
      *
-     * @link https://discord.com/developers/docs/resources/channel#deleteclose-channel
+     * @link https://docs.discord.com/developers/resources/channel#deleteclose-channel
      *
      * @param string|null $reason Reason for Audit Log.
      *
@@ -881,8 +961,8 @@ class Channel extends Part implements Stringable
     /**
      * Starts a thread in the channel.
      *
-     * @link https://discord.com/developers/docs/resources/channel#start-thread-without-message
-     * @link https://discord.com/developers/docs/resources/channel#start-thread-in-forum-channel
+     * @link https://docs.discord.com/developers/resources/channel#start-thread-without-message
+     * @link https://docs.discord.com/developers/resources/channel#start-thread-in-forum-channel
      *
      * @param array          $options                          Thread params.
      * @param bool           $options['private']               Whether the thread should be private. Cannot start a private thread in an announcement channel. Ignored in forum channel.
@@ -1057,7 +1137,7 @@ class Channel extends Part implements Stringable
     /**
      * @inheritDoc
      *
-     * @link https://discord.com/developers/docs/resources/guild#create-guild-channel-json-params
+     * @link https://docs.discord.com/developers/resources/guild#create-guild-channel-json-params
      */
     public function getCreatableAttributes(): array
     {
@@ -1146,7 +1226,7 @@ class Channel extends Part implements Stringable
     /**
      * @inheritDoc
      *
-     * @link https://discord.com/developers/docs/resources/channel#modify-channel-json-params-guild-channel
+     * @link https://docs.discord.com/developers/resources/channel#modify-channel-json-params-guild-channel
      */
     public function getUpdatableAttributes(): array
     {
@@ -1258,7 +1338,7 @@ class Channel extends Part implements Stringable
                     return reject(new NoPermissionsException("You do not have permission to manage channels in the guild {$this->attributes['guild_id']}."));
                 }
             }
-            
+
             return $repository->save($this, $reason);
         } elseif ($this->created && $repository->get('id', $this->id)) {
             $data = [];

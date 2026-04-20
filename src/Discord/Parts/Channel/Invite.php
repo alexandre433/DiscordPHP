@@ -36,7 +36,7 @@ use function React\Promise\reject;
 /**
  * An invite to a Channel and Guild.
  *
- * @link https://discord.com/developers/docs/resources/invite
+ * @link https://docs.discord.com/developers/resources/invite
  *
  * @since 7.0.0 Namespace moved from Guild to Channel
  * @since 2.0.0
@@ -335,7 +335,7 @@ class Invite extends Part implements Stringable
     public function getTargetUsers(): PromiseInterface
     {
         if ($botperms = $this->channel->getBotPermissions()) {
-            if (! $botperms->manage_guild && ! $botperms->view_audit_log && ! $this->inviter->id === $this->discord->user->id) {
+            if (! $botperms->manage_guild && ! $botperms->view_audit_log && $this->inviter->id !== $this->discord->user->id) {
                 return reject(new NoPermissionsException("You do not have permission to create invites in the channel {$this->channel->id}."));
             }
         }
@@ -362,8 +362,8 @@ class Invite extends Part implements Stringable
      */
     public function updateTargetUsers(string $filepath, ?string $filename = null): PromiseInterface
     {
-        if ($botperms = $this->channel->getBotPermissions()) {
-            if (! $botperms->manage_guild && ! $this->inviter->id === $this->discord->user->id) {
+        if ($this->channel && $botperms = $this->channel->getBotPermissions()) {
+            if (! $botperms->manage_guild && $this->inviter->id !== $this->discord->user->id) {
                 return reject(new NoPermissionsException("You do not have permission to create invites in the channel {$this->channel->id}."));
             }
         }
@@ -397,8 +397,8 @@ class Invite extends Part implements Stringable
      */
     public function updateTargetUsersFromContent(string $content, string $filename = 'target_users.csv'): PromiseInterface
     {
-        if ($botperms = $this->channel->getBotPermissions()) {
-            if (! $botperms->manage_guild && ! $this->inviter->id === $this->discord->user->id) {
+        if ($this->channel && $botperms = $this->channel->getBotPermissions()) {
+            if (! $botperms->manage_guild && $this->inviter->id !== $this->discord->user->id) {
                 return reject(new NoPermissionsException("You do not have permission to create invites in the channel {$this->channel->id}."));
             }
         }
@@ -432,8 +432,8 @@ class Invite extends Part implements Stringable
      */
     public function getTargetUsersJobStatus()
     {
-        if ($botperms = $this->channel->getBotPermissions()) {
-            if (! $botperms->manage_guild && ! $botperms->view_audit_log && ! $this->inviter->id === $this->discord->user->id) {
+        if ($this->channel && $botperms = $this->channel->getBotPermissions()) {
+            if (! $botperms->manage_guild && ! $botperms->view_audit_log && $this->inviter->id !== $this->discord->user->id) {
                 return reject(new NoPermissionsException("You do not have permission to create invites in the channel {$this->channel->id}."));
             }
         }

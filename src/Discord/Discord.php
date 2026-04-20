@@ -42,6 +42,7 @@ use Discord\Repository\GuildRepository;
 use Discord\Repository\LobbyRepository;
 use Discord\Repository\PrivateChannelRepository;
 use Discord\Repository\SoundRepository;
+use Discord\Repository\StickerPackRepository;
 use Discord\Repository\UserRepository;
 use Discord\Voice\Manager;
 use Discord\Voice\Region;
@@ -97,6 +98,7 @@ use function React\Promise\resolve;
  * @property LobbyRepository          $lobbies
  * @property PrivateChannelRepository $private_channels
  * @property SoundRepository          $sounds
+ * @property StickerPackRepository    $sticker_packs
  * @property UserRepository           $users
  */
 class Discord
@@ -115,7 +117,7 @@ class Discord
      *
      * @var string Version.
      */
-    public const VERSION = 'v10.46.0';
+    public const VERSION = 'v10.48.0';
 
     public const REFERRER = 'https://github.com/discord-php/DiscordPHP';
 
@@ -138,7 +140,7 @@ class Discord
      *
      * @var array Options.
      */
-    protected $options;
+    protected $options = [];
 
     /**
      * The authentication token.
@@ -1089,7 +1091,7 @@ class Discord
     /**
      * Used to trigger the initial handshake with the gateway.
      *
-     * @link https://discord.com/developers/docs/events/gateway#identifying
+     * @link https://docs.discord.com/developers/events/gateway#identifying
      */
     public function identify(): void
     {
@@ -1128,6 +1130,10 @@ class Discord
             $data['presence'] = $this->options['presence'];
         }
 
+        if (isset($this->options['capabilities']) && $this->options['capabilities']) {
+            $data['capabilities'] = $this->options['capabilities'];
+        }
+
         $payload = Payload::new(
             Op::OP_IDENTIFY,
             $data,
@@ -1141,8 +1147,8 @@ class Discord
     /**
      * Used to replay missed events when a disconnected client resumes.
      *
-     * @link https://discord.com/developers/docs/events/gateway-events#resume
-     * @link https://discord.com/developers/docs/events/gateway#resuming
+     * @link https://docs.discord.com/developers/events/gateway-events#resume
+     * @link https://docs.discord.com/developers/events/gateway#resuming
      *
      * @since 10.19.0
      */
@@ -1197,7 +1203,7 @@ class Discord
      *
      * @see self::handleGuildMembersChunk()
      *
-     * @link https://discord.com/developers/docs/events/gateway-events#request-guild-members
+     * @link https://docs.discord.com/developers/events/gateway-events#request-guild-members
      *
      * @param Guild|string       $guild_id             ID of the guild or Guild object. Required.
      * @param array              $options
@@ -1260,7 +1266,7 @@ class Discord
      *
      * @see \Discord\WebSockets\Events\SoundboardSounds
      *
-     * @link https://discord.com/developers/docs/events/gateway-events#request-soundboard-sounds
+     * @link https://docs.discord.com/developers/events/gateway-events#request-soundboard-sounds
      *
      * @param array $guildIds Array of guild IDs.
      */
@@ -1277,9 +1283,40 @@ class Discord
     }
 
     /**
+     * Requests ephemeral channel data for channels in a guild. The server will send a Channel Info event in response.
+     *
+     * @see \Discord\WebSockets\Events\ChannelInfo
+     *
+     * @link https://docs.discord.com/developers/events/gateway-events#channel-info
+     *
+     * @param Guild|string $guild  ID of the guild or Guild object.
+     * @param string[]     $fields Array of strings specifying which fields to include in the response.
+     *
+     * @since 10.48.0
+     */
+    public function requestChannelInfo($guild, array $fields)
+    {
+        if (! is_string($guild)) {
+            $guild = $guild->id;
+        }
+
+        $payloadData = [
+            'guild_id' => $guild,
+            'fields' => array_values($fields),
+        ];
+
+        $payload = Payload::new(
+            Op::OP_REQUEST_CHANNEL_INFO,
+            $payloadData,
+        );
+
+        $this->send($payload);
+    }
+
+    /**
      * Sent when a client wants to join, move, or disconnect from a voice channel.
      *
-     * @link https://discord.com/developers/docs/events/gateway-events#update-voice-state
+     * @link https://docs.discord.com/developers/events/gateway-events#update-voice-state
      *
      * @param Guild|string        $guild_id   ID of the guild.
      * @param Channel|string|null $channel_id ID of the voice channel to join, or null to disconnect.
@@ -1314,7 +1351,7 @@ class Discord
     /**
      * Sent by the client to indicate a presence or status update.
      *
-     * @link https://discord.com/developers/docs/events/gateway-events#update-presence
+     * @link https://docs.discord.com/developers/events/gateway-events#update-presence
      *
      * @param Activity|null $activity The current client activity, or null.
      *                                Note: Both name and state must be set to use custom, and the only valid fields are `name`, `state`, `type` and `url`.
@@ -1434,8 +1471,12 @@ class Discord
         $this->emittedInit = true;
 
         if (class_exists(Manager::class)) {
-            $this->voice = new Manager($this);
-            $this->logger->info('voice class initialized');
+            try {
+                $this->voice = new Manager($this);
+                $this->logger->info('voice class initialized');
+            } catch (\Throwable $e) {
+                $this->logger->error('failed to initialize voice class', ['exception' => $e]);
+            }
         }
 
         $this->logger->info('client is ready');
@@ -1688,6 +1729,7 @@ class Discord
                 'shardCount',
                 'presence',
                 'intents',
+                'capabilities',
                 'socket_options',
                 'dnsConfig',
                 'cache',
@@ -1709,6 +1751,7 @@ class Discord
                 'shardCount' => null,
                 'presence' => null,
                 'intents' => Intents::getDefaultIntents(),
+                'capabilities' => null,
                 'socket_options' => [],
                 'cache' => [AbstractRepository::class => null], // use LegacyCacheWrapper
                 'collection' => Collection::class,
@@ -1730,6 +1773,7 @@ class Discord
             ->setAllowedTypes('shardCount', ['null', 'int'])
             ->setAllowedTypes('presence', ['null', 'array'])
             ->setAllowedTypes('intents', ['array', 'int'])
+            ->setAllowedTypes('capabilities', ['null', 'array', 'int'])
             ->setAllowedTypes('socket_options', 'array')
             ->setAllowedTypes('dnsConfig', ['string', \React\Dns\Config\Config::class])
             ->setAllowedTypes('cache', ['array', CacheConfig::class, \React\Cache\CacheInterface::class, \Psr\SimpleCache\CacheInterface::class])
@@ -1789,6 +1833,20 @@ class Discord
             }
 
             $options['intents'] = $intent;
+        }
+
+        if (is_array($options['capabilities'])) {
+            $capabilities = 0;
+
+            foreach ($options['capabilities'] as $idx => $i) {
+                if (! is_numeric(($i))) {
+                    throw new IntentException('Given capability at index '.$idx.' is invalid.');
+                }
+
+                $capabilities |= $i;
+            }
+
+            $options['capabilities'] = $capabilities ?: null;
         }
 
         if ($options['loadAllMembers'] && ! ($options['intents'] & Intents::GUILD_MEMBERS)) {
@@ -2095,8 +2153,8 @@ class Discord
         static $secrets = [
             'token' => '*****',
         ];
-        $replace = array_intersect_key($secrets, $this->options);
-        $config = $replace + $this->options;
+        $replace = array_intersect_key($secrets, $this->options ?? []);
+        $config = $replace + $this->options ?? [];
 
         unset($config['loop'], $config['logger']);
 

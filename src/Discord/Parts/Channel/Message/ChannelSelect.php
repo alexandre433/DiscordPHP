@@ -24,7 +24,7 @@ use Discord\Helpers\ExCollectionInterface;
  *
  * Channel Selects must be placed inside an Action Row and are only available in messages. An Action Row can contain only one select menu and cannot contain buttons if it has a select menu.
  *
- * @link https://discord.com/developers/docs/components/reference#channel-select
+ * @link https://docs.discord.com/developers/components/reference#channel-select
  *
  * @since 10.11.0
  *
@@ -37,6 +37,8 @@ use Discord\Helpers\ExCollectionInterface;
  * @property int|null                                           $min_values     Minimum number of items that must be chosen (defaults to 1); min 0, max 25.
  * @property int|null                                           $max_values     Maximum number of items that can be chosen (defaults to 1); max 25.
  * @property bool|null                                          $disabled       Whether select menu is disabled (defaults to false).
+ *
+ * @property-read string[]|null $values IDs of the selected channels. (Only included in the response).
  */
 class ChannelSelect extends SelectMenu
 {
@@ -53,5 +55,9 @@ class ChannelSelect extends SelectMenu
         'min_values',
         'max_values',
         'disabled',
+        'values',
+
+        // @internal
+        'component_type',
     ];
 }

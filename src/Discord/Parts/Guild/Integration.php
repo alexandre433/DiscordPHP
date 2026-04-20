@@ -15,16 +15,20 @@ declare(strict_types=1);
 namespace Discord\Parts\Guild;
 
 use Carbon\Carbon;
+use Discord\Http\Exceptions\NoPermissionsException;
 use Discord\Parts\OAuth\Application;
 use Discord\Parts\Part;
 use Discord\Parts\User\User;
 use Discord\Repository\Guild\IntegrationRepository;
 use React\Promise\PromiseInterface;
 
+use function React\Promise\reject;
+
 /**
  * An Integration is a guild integrations for Twitch, YouTube, Bot and Apps.
  *
- * @link https://discord.com/developers/docs/resources/guild#integration-object
+ * @link https://docs.discord.com/developers/resources/guild#integration-object
+ * @link https://docs.discord.com/developers/events/gateway-events#interaction-create
  *
  * @since 7.0.0
  *
@@ -119,7 +123,7 @@ class Integration extends Part
     /**
      * Returns the application attribute.
      *
-     * @todo return correct Application structure https://discord.com/developers/docs/resources/guild#integration-application-object
+     * @todo return correct Application structure https://docs.discord.com/developers/resources/guild#integration-application-object
      *
      * @return Application|null
      */
@@ -193,6 +197,41 @@ class Integration extends Part
         }
 
         return parent::save();
+    }
+
+    /**
+     * Syncs an integration for the guild.
+     *
+     * Fires Guild Integrations Update and Integration Update Gateway events.
+     *
+     * @link https://docs.discord.com/developers/resources/guild#sync-guild-integration
+     *
+     * @since 10.46.0
+     *
+     * @throws NoPermissionsException If the bot does not have the `MANAGE_GUILD` permissions.
+     *
+     * @return PromiseInterface<Integration>
+     */
+    public function sync(): PromiseInterface
+    {
+        if (! isset($this->attributes['guild_id'])) {
+            return reject(new \Exception('Integration does not belong to a guild.'));
+        }
+            
+        /** @var Guild $guild */
+        $guild = $this->guild ?? $this->factory->part(Guild::class, ['id' => $this->attributes['guild_id']], true);
+
+        if ($botperms = $guild->getBotPermissions()) {
+            if (! $botperms->manageGuild) {
+                return reject(new NoPermissionsException('The bot requires the MANAGE_GUILD permission to sync this integration.'));
+            }
+        }
+
+        return $guild->integrations->sync($this->id)->then(function ($response) {
+            $this->fill((array) $response);
+
+            return $this;
+        });
     }
 
     /**

@@ -16,6 +16,7 @@ namespace Discord\Parts\User;
 
 use Carbon\Carbon;
 use Discord\Builders\MessageBuilder;
+use Discord\Exceptions\PartRequestFailedException;
 use Discord\Helpers\BigInt;
 use Discord\Helpers\ExCollectionInterface;
 use Discord\Http\Endpoint;
@@ -42,7 +43,7 @@ use function React\Promise\reject;
 /**
  * A member is a relationship between a user and a guild. It contains user-to-guild specific data like roles.
  *
- * @link https://discord.com/developers/docs/resources/guild#guild-member-object
+ * @link https://docs.discord.com/developers/resources/guild#guild-member-object
  *
  * @since 2.0.0
  *
@@ -160,8 +161,8 @@ class Member extends Part implements Stringable
      * @param int|null    $daysToDeleteMessages The amount of days to delete messages from.
      * @param string|null $reason               Reason of the Ban.
      *
-     * @throws \RuntimeException      Member has no `$guild`.
-     * @throws NoPermissionsException Missing `ban_members` permission.
+     * @throws PartRequestFailedException Member has no `$guild`.
+     * @throws NoPermissionsException     Missing `ban_members` permission.
      *
      * @return PromiseInterface<Ban>
      */
@@ -169,7 +170,7 @@ class Member extends Part implements Stringable
     {
         return $this->discord->guilds->cacheGet($this->guild_id)->then(function (?Guild $guild) use ($daysToDeleteMessages, $reason) {
             if (null === $guild) {
-                return reject(new \RuntimeException('Member has no Guild Part'));
+                return reject(new PartRequestFailedException('Member has no Guild Part'));
             }
 
             if ($botperms = $guild->getBotPermissions()) {
@@ -187,8 +188,8 @@ class Member extends Part implements Stringable
      *
      * @param string|null $reason Reason for Audit Log.
      *
-     * @throws \RuntimeException      Member has no `$guild`.
-     * @throws NoPermissionsException Missing `kick_members` permission.
+     * @throws PartRequestFailedException Member has no `$guild`.
+     * @throws NoPermissionsException     Missing `kick_members` permission.
      *
      * @return PromiseInterface<self>
      */
@@ -196,7 +197,7 @@ class Member extends Part implements Stringable
     {
         return $this->discord->guilds->cacheGet($this->guild_id)->then(function (?Guild $guild) use ($reason) {
             if (null === $guild) {
-                return new \RuntimeException('Member has no Guild Part');
+                return reject(new PartRequestFailedException('Member has no Guild Part'));
             }
 
             if ($botperms = $guild->getBotPermissions()) {
@@ -279,13 +280,13 @@ class Member extends Part implements Stringable
     /**
      * Adds a role to the member.
      *
-     * @link https://discord.com/developers/docs/resources/guild#add-guild-member-role
+     * @link https://docs.discord.com/developers/resources/guild#add-guild-member-role
      *
      * @param Role|string $role   The role to add to the member.
      * @param string|null $reason Reason for Audit Log.
      *
-     * @throws \RuntimeException
-     * @throws NoPermissionsException Missing manage_roles permission.
+     * @throws PartRequestFailedException Member already has role.
+     * @throws NoPermissionsException     Missing manage_roles permission.
      *
      * @return PromiseInterface
      */
@@ -297,7 +298,7 @@ class Member extends Part implements Stringable
 
         // We don't want a double up on roles
         if (in_array($role, (array) $this->attributes['roles'])) {
-            return reject(new \RuntimeException('Member already has role.'));
+            return reject(new PartRequestFailedException('Member already has role.'));
         }
 
         if ($guild = $this->guild) {
@@ -329,7 +330,7 @@ class Member extends Part implements Stringable
     /**
      * Removes a role from the member.
      *
-     * @link https://discord.com/developers/docs/resources/guild#remove-guild-member-role
+     * @link https://docs.discord.com/developers/resources/guild#remove-guild-member-role
      *
      * @param Role|string $role   The role to remove from the member.
      * @param string|null $reason Reason for Audit Log.
@@ -373,7 +374,7 @@ class Member extends Part implements Stringable
     /**
      * Updates member roles.
      *
-     * @link https://discord.com/developers/docs/resources/guild#modify-guild-member
+     * @link https://docs.discord.com/developers/resources/guild#modify-guild-member
      *
      * @param ExCollectionInterface<Role|string>|Role[]|string[] $roles  The roles to set to the member.
      * @param string|null                                        $reason Reason for Audit Log.
@@ -432,7 +433,7 @@ class Member extends Part implements Stringable
      * @param AllowedMentions|array|null $allowed_mentions Allowed mentions object for the message.
      * @param Message|null               $replyTo          Sends the message as a reply to the given message instance.
      *
-     * @throws \RuntimeException
+     * @throws PartRequestFailedException Member had no user part.
      *
      * @return PromiseInterface<Message>
      */
@@ -442,7 +443,7 @@ class Member extends Part implements Stringable
             return $user->sendMessage($message, $tts, $embed, $allowed_mentions, $replyTo);
         }
 
-        return reject(new \RuntimeException('Member had no user part.'));
+        return reject(new PartRequestFailedException('Member had no user part.'));
     }
 
     /**
@@ -451,7 +452,7 @@ class Member extends Part implements Stringable
      * Note that Discord permissions are complex and YOU need to account for the
      * fact that you cannot edit a role higher than your own.
      *
-     * @link https://discord.com/developers/docs/topics/permissions
+     * @link https://docs.discord.com/developers/topics/permissions
      *
      * @param Channel|Thread|null $channel The channel to check its permission overwrites. `null` for just Role.
      *
@@ -1003,7 +1004,7 @@ class Member extends Part implements Stringable
     /**
      * @inheritDoc
      *
-     * @link https://discord.com/developers/docs/resources/guild#modify-guild-member-json-params
+     * @link https://docs.discord.com/developers/resources/guild#modify-guild-member-json-params
      */
     public function getUpdatableAttributes(): array
     {
@@ -1064,7 +1065,7 @@ class Member extends Part implements Stringable
         }
 
         // @todo Add more permission checks
-        // @link https://discord.com/developers/docs/resources/guild#modify-guild-member
+        // @link https://docs.discord.com/developers/resources/guild#modify-guild-member
 
         return $guild->members->save($this, $reason);
     }

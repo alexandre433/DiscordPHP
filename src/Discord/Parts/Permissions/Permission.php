@@ -23,7 +23,7 @@ use Discord\Parts\Part;
  *
  * Note: The const declared here are the bit position, not the bitwise value.
  *
- * @link https://discord.com/developers/docs/topics/permissions
+ * @link https://docs.discord.com/developers/topics/permissions
  *
  * @since 10.19.0 Added constants for all permissions.
  * @since 2.1.3 Namespace moved from Guild to Permissions
@@ -178,6 +178,8 @@ abstract class Permission extends Part
     public const USE_EXTERNAL_SOUNDS = 45;
     /** Allows sending voice messages. */
     public const SEND_VOICE_MESSAGES = 46;
+    /** Allows setting voice channel status. */
+    public const SET_VOICE_CHANNEL_STATUS = 48;
     /** Allows sending polls. */
     public const SEND_POLLS = 49;
     /** Allows user-installed apps to send public responses. When disabled, users will still be allowed to use their apps but the responses will be ephemeral. This only applies to apps not also installed to the server. */
@@ -229,6 +231,7 @@ abstract class Permission extends Part
         'create_events' => self::CREATE_EVENTS,
         'use_external_sounds' => self::USE_EXTERNAL_SOUNDS,
         'send_voice_messages' => self::SEND_VOICE_MESSAGES,
+        'set_voice_channel_status' => self::SET_VOICE_CHANNEL_STATUS,
         'send_polls' => self::SEND_POLLS,
         'bypass_slowmode' => self::BYPASS_SLOWMODE,
     ];
@@ -335,7 +338,7 @@ abstract class Permission extends Part
     /**
      * Gets the bitwise attribute of the permission.
      *
-     * @link https://discord.com/developers/docs/topics/permissions#permissions-bitwise-permission-flags
+     * @link https://docs.discord.com/developers/topics/permissions#permissions-bitwise-permission-flags
      *
      * @return int|string
      */
@@ -365,7 +368,7 @@ abstract class Permission extends Part
     /**
      * Sets the bitwise attribute of the permission.
      *
-     * @link https://discord.com/developers/docs/topics/permissions#permissions-bitwise-permission-flags
+     * @link https://docs.discord.com/developers/topics/permissions#permissions-bitwise-permission-flags
      *
      * @param int|string $bitwise
      */
